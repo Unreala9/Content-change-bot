@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Sync & Channel Mirror Studio</title>
+    <!-- Google Fonts & FontAwesome -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-container">
+                <div class="logo-icon"><i class="fa-paper-plane fa-telegram-blue"></i></div>
+                <div class="logo-text">
+                    <h2>Telegram<span>Sync</span></h2>
+                    <span class="version-tag">Mirror Studio v2.5</span>
+                </div>
+            </div>
+
+            <nav class="nav-menu">
+                <button class="nav-btn active" data-tab="tab-studio">
+                    <i class="fa-solid fa-arrows-split-up-and-left"></i> Channel Studio
+                </button>
+                <button class="nav-btn" data-tab="tab-overview">
+                    <i class="fa-solid fa-chart-pie"></i> Overview & Auth
+                </button>
+                <button class="nav-btn" data-tab="tab-channels">
+                    <i class="fa-solid fa-comments"></i> Channels Directory
+                </button>
+                <button class="nav-btn" data-tab="tab-logs">
+                    <i class="fa-solid fa-list-check"></i> Raw Logs
+                </button>
+            </nav>
+
+            <div class="sidebar-status-card">
+                <div class="status-indicator-dot" id="sidebarStatusDot"></div>
+                <div class="status-info">
+                    <span class="status-title" id="sidebarStatusTitle">Checking Connection...</span>
+                    <span class="status-subtitle" id="sidebarStatusUser">--</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h1 id="pageTitle">Side-by-Side Channel Mirror Studio</h1>
+                    <p id="pageSubtitle">Extract from Source Channel ➔ Modify with Engine ➔ Post to Destination Channel & n8n</p>
+                </div>
+                <div class="header-actions">
+                    <div class="pill-badge status-connected" id="headerConnectionBadge">
+                        <i class="fa-solid fa-wifi"></i> Connected
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="btnRefreshStatus">
+                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                    </button>
+                </div>
+            </header>
+
+            <!-- TAB 0: SIDE-BY-SIDE CHANNEL MIRROR STUDIO (PRIMARY WORKSPACE) -->
+            <section class="tab-content active" id="tab-studio">
+                <!-- Channel Selector Toolbar & Flow Bar -->
+                <div class="studio-toolbar glass-card">
+                    <!-- Source Channel Selector -->
+                    <div class="selector-box source-box">
+                        <label for="selectSourceChannel"><i class="fa-solid fa-download text-blue"></i> Source Channel (Extract From)</label>
+                        <select id="selectSourceChannel" class="form-control">
+                            <option value="all">⚡ All Incoming Channels & Chats</option>
+                        </select>
+                    </div>
+
+                    <!-- Visual Flow Arrow & Auto-Post Toggle -->
+                    <div class="flow-indicator-box">
+                        <i class="fa-solid fa-arrow-right-long flow-arrow"></i>
+                        <div class="auto-post-toggle-box">
+                            <label class="switch">
+                                <input type="checkbox" id="toggleAutoPost">
+                                <span class="slider round"></span>
+                            </label>
+                            <span class="toggle-label">Auto-Post</span>
+                        </div>
+                    </div>
+
+                    <!-- Destination Channel Selector -->
+                    <div class="selector-box dest-box">
+                        <label for="selectDestChannel"><i class="fa-solid fa-upload text-green"></i> Destination Channel (Paste To)</label>
+                        <div style="display:flex; gap:8px;">
+                            <select id="selectDestChannel" class="form-control">
+                                <option value="">Select Destination Channel...</option>
+                            </select>
+                            <button class="btn btn-primary btn-sm" id="btnStudioSendDirect" title="Send direct message">
+                                <i class="fa-solid fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Open Rules Modal Button -->
+                    <div class="selector-box" style="flex: 0 0 auto;">
+                        <label>&nbsp;</label>
+                        <button class="btn btn-secondary btn-sm" id="btnOpenRulesModal">
+                            <i class="fa-solid fa-wand-magic-sparkles text-purple"></i> ⚙️ Modifier Rules
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2-PANE TELEGRAM SPLIT CHAT WORKSPACE -->
+                <div class="telegram-chat-workspace">
+                    
+                    <!-- LEFT PANE: SOURCE TELEGRAM CHAT WINDOW -->
+                    <div class="tg-chat-pane tg-pane-source">
+                        <div class="tg-chat-header">
+                            <div class="tg-chat-info">
+                                <div class="tg-avatar source-avatar"><i class="fa-solid fa-bullhorn"></i></div>
+                                <div>
+                                    <h3 id="labelSourceChannelName">Source Channel</h3>
+                                    <span class="tg-status-subtitle" id="badgeSourceId">Extract Feed</span>
+                                </div>
+                            </div>
+                            <button class="btn btn-outline btn-xs" id="btnRefreshSourceStream" title="Refresh source messages">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="tg-chat-body" id="streamSourceFeed">
+                            <div class="stream-empty">
+                                <i class="fa-solid fa-wave-square"></i>
+                                <p>Waiting for messages from Source Channel...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CENTER MODIFIER BRIDGE -->
+                    <div class="tg-modifier-bridge">
+                        <div class="bridge-icon" title="Transformation Engine Active"><i class="fa-solid fa-arrow-right-arrow-left"></i></div>
+                        <button class="btn btn-primary btn-xs bridge-btn" id="btnBridgeOpenRules" title="Open Transformation Rules">
+                            <i class="fa-solid fa-sliders"></i> Rules
+                        </button>
+                    </div>
+
+                    <!-- RIGHT PANE: DESTINATION TELEGRAM CHAT WINDOW -->
+                    <div class="tg-chat-pane tg-pane-dest">
+                        <div class="tg-chat-header">
+                            <div class="tg-chat-info">
+                                <div class="tg-avatar dest-avatar"><i class="fa-solid fa-paper-plane"></i></div>
+                                <div>
+                                    <h3 id="labelDestChannelName">Destination Channel</h3>
+                                    <span class="tg-status-subtitle" id="badgeDestId">Paste Feed</span>
+                                </div>
+                            </div>
+                            <button class="btn btn-outline btn-xs" id="btnRefreshDestStream" title="Refresh destination messages">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="tg-chat-body" id="streamDestFeed">
+                            <div class="stream-empty">
+                                <i class="fa-solid fa-paper-plane"></i>
+                                <p>Transformed messages will post to Destination Channel...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+
+            <!-- TAB 1: OVERVIEW & AUTH -->
+            <section class="tab-content" id="tab-overview">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon icon-blue"><i class="fa-solid fa-inbox"></i></div>
+                        <div class="stat-details">
+                            <span class="stat-value" id="statReceived">0</span>
+                            <span class="stat-label">Messages Received</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon icon-green"><i class="fa-solid fa-paper-plane"></i></div>
+                        <div class="stat-details">
+                            <span class="stat-value" id="statForwarded">0</span>
+                            <span class="stat-label">Forwarded to n8n</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon icon-purple"><i class="fa-solid fa-share-nodes"></i></div>
+                        <div class="stat-details">
+                            <span class="stat-value" id="statAutoPosted">0</span>
+                            <span class="stat-label">Auto-Posted to Telegram</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon icon-orange"><i class="fa-solid fa-filter"></i></div>
+                        <div class="stat-details">
+                            <span class="stat-value" id="statFiltered">0</span>
+                            <span class="stat-label">Filtered / Skipped</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="cards-layout">
+                    <!-- Telegram Account Card -->
+                    <div class="card glass-card">
+                        <div class="card-header">
+                            <h3><i class="fa-brands fa-telegram"></i> Telegram Account Status</h3>
+                            <span class="badge" id="accountBadge">Checking...</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="user-profile-widget" id="userProfileWidget">
+                                <div class="avatar-circle" id="userAvatar">T</div>
+                                <div class="profile-meta">
+                                    <h4 id="userName">Not Signed In</h4>
+                                    <p id="userUsername">--</p>
+                                    <p id="userPhone" class="text-muted">--</p>
+                                </div>
+                            </div>
+                            <div class="profile-actions">
+                                <button class="btn btn-outline" id="btnOpenLoginModal">
+                                    <i class="fa-solid fa-key"></i> Authenticate Account
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Webhook Target Card -->
+                    <div class="card glass-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-link"></i> Active n8n Target</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="webhook-preview-box">
+                                <span class="url-label">Endpoint URL:</span>
+                                <code id="overviewWebhookUrl">https://n8n.getaipilot.in/webhook/telegram_sync</code>
+                            </div>
+                            <p class="card-desc">Transformed messages are automatically POSTed to this n8n webhook URL.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: CHANNELS DIRECTORY -->
+            <section class="tab-content" id="tab-channels">
+                <div class="toolbar">
+                    <div class="search-box">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input type="text" id="channelSearchInput" placeholder="Search channels, groups, or contacts by name or ID...">
+                    </div>
+                    <div class="filter-pills">
+                        <button class="filter-pill active" data-filter="all">All</button>
+                        <button class="filter-pill" data-filter="Channel">Channels</button>
+                        <button class="filter-pill" data-filter="Chat">Groups</button>
+                        <button class="filter-pill" data-filter="User">Contacts</button>
+                    </div>
+                    <button class="btn btn-primary" id="btnFetchChannels">
+                        <i class="fa-solid fa-arrows-rotate"></i> Load Channels
+                    </button>
+                </div>
+
+                <div class="channels-grid" id="channelsGrid">
+                    <div class="loading-spinner-container">
+                        <i class="fa-solid fa-spinner fa-spin"></i> Loading channels from Telegram...
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: RAW LOGS -->
+            <section class="tab-content" id="tab-logs">
+                <div class="card glass-card full-width-card">
+                    <div class="card-header">
+                        <h3><i class="fa-solid fa-terminal"></i> Intercepted Telegram Messages Feed</h3>
+                        <button class="btn btn-outline btn-sm" id="btnRefreshLogs">
+                            <i class="fa-solid fa-arrows-rotate"></i> Refresh Feed
+                        </button>
+                    </div>
+                    <div class="card-body padding-0">
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Source Chat</th>
+                                        <th>Raw Message</th>
+                                        <th>Transformed Message</th>
+                                        <th>n8n Webhook</th>
+                                        <th>Telegram Auto-Post</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="fullLogsTable">
+                                    <tr><td colspan="6" class="text-center text-muted">Loading live message feed...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- MODAL 1: Telegram Phone Login Modal -->
+    <div class="modal-backdrop" id="loginModal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-brands fa-telegram"></i> Telegram Login</h3>
+                <button class="close-btn" id="btnCloseLoginModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="loginStep1">
+                    <p>Enter your Telegram registered phone number with international country code (e.g. <code>+919343418163</code>):</p>
+                    <div class="form-group">
+                        <input type="text" id="loginPhoneNumber" class="form-control" placeholder="+91..." required>
+                    </div>
+                    <button class="btn btn-primary w-100" id="btnSendPhoneCode">
+                        <i class="fa-solid fa-paper-plane"></i> Send Verification Code
+                    </button>
+                </div>
+                <div id="loginStep2" class="hidden">
+                    <p class="text-success">✅ Verification code sent to your Telegram app!</p>
+                    <div class="form-group">
+                        <label for="loginCode">Verification Code</label>
+                        <input type="text" id="loginCode" class="form-control" placeholder="12345" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="loginPassword">2FA Password (Optional)</label>
+                        <input type="password" id="loginPassword" class="form-control" placeholder="Two-factor password">
+                    </div>
+                    <button class="btn btn-success w-100" id="btnVerifyCode">
+                        <i class="fa-solid fa-check"></i> Sign In to Telegram
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: Send Message Modal -->
+    <div class="modal-backdrop" id="sendMessageModal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-paper-plane"></i> Send Telegram Message</h3>
+                <button class="close-btn" id="btnCloseSendModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="sendMessageForm">
+                    <div class="form-group">
+                        <label for="sendDestinationChat">Destination Chat Title / ID</label>
+                        <input type="text" id="sendDestinationChat" class="form-control" readonly required>
+                        <input type="hidden" id="sendDestinationId">
+                    </div>
+                    <div class="form-group">
+                        <label for="sendMessageText">Message Text</label>
+                        <textarea id="sendMessageText" class="form-control" rows="4" placeholder="Type your message here..." required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100" id="btnSubmitSend">
+                        <i class="fa-solid fa-paper-plane"></i> Send Message
+                    </button>
+                </form>
+    <!-- MODAL 3: Modifier Rules Drawer Modal -->
+    <div class="modal-backdrop" id="rulesDrawerModal">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-wand-magic-sparkles text-purple"></i> Modifier Engine Rules & Settings</h3>
+                <button class="close-btn" id="btnCloseRulesDrawer">&times;</button>
+            </div>
+            <div class="modal-body modifier-controls">
+                <!-- Webhook URL -->
+                <div class="form-group">
+                    <label for="studioWebhookUrl"><i class="fa-solid fa-globe"></i> n8n Webhook Target URL</label>
+                    <input type="url" id="studioWebhookUrl" class="form-control" placeholder="https://n8n.example.com/webhook/...">
+                </div>
+
+                <!-- Text Prefix & Suffix -->
+                <div class="form-row">
+                    <div class="form-group col">
+                        <label for="studioPrefix">Text Prefix</label>
+                        <input type="text" id="studioPrefix" class="form-control" placeholder="[MIRROR] ">
+                    </div>
+                    <div class="form-group col">
+                        <label for="studioSuffix">Text Suffix</label>
+                        <input type="text" id="studioSuffix" class="form-control" placeholder=" #Sync">
+                    </div>
+                </div>
+
+                <!-- Find & Replace -->
+                <div class="form-row">
+                    <div class="form-group col">
+                        <label for="studioFindText">Find Text</label>
+                        <input type="text" id="studioFindText" class="form-control" placeholder="Word to replace">
+                    </div>
+                    <div class="form-group col">
+                        <label for="studioReplaceText">Replace With</label>
+                        <input type="text" id="studioReplaceText" class="form-control" placeholder="Replacement">
+                    </div>
+                </div>
+
+                <!-- Filter Mode & Keywords -->
+                <div class="form-row">
+                    <div class="form-group col">
+                        <label for="studioFilterMode">Filter Mode</label>
+                        <select id="studioFilterMode" class="form-control">
+                            <option value="all">Forward All Messages</option>
+                            <option value="contains">Only Forward If Contains Keywords</option>
+                        </select>
+                    </div>
+                    <div class="form-group col" id="studioGroupKeyword">
+                        <label for="studioKeywordFilter">Filter Keywords</label>
+                        <input type="text" id="studioKeywordFilter" class="form-control" placeholder="crypto, urgent">
+                    </div>
+                </div>
+
+                <!-- Live Rule Sandbox & Transfer -->
+                <div class="studio-sandbox-box">
+                    <div class="sandbox-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <span class="sandbox-title"><i class="fa-solid fa-vial"></i> Live Rule Tester & Quick Transfer</span>
+                        <span class="badge badge-success" id="studioSandboxBadge">Allowed</span>
+                    </div>
+                    <textarea id="studioSampleText" class="form-control" rows="3" placeholder="Type test message or click 'Load into Modifier' from left chat..."></textarea>
+                    <div class="studio-sandbox-preview" id="studioSandboxResult">[MIRROR] Modified preview text appears here... #Sync</div>
+                    <button class="btn btn-success btn-sm w-100" id="btnPostSandboxToDest" style="margin-top: 10px; width: 100%;">
+                        <i class="fa-solid fa-paper-plane"></i> Post Modified Message to Destination Channel
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 16px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;">
+                <button class="btn btn-primary" id="btnSaveStudioRules">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Rules & Settings
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Application Logic -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
+

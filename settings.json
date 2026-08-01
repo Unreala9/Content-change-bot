@@ -1,0 +1,13 @@
+{
+  "webhook_url": "https://n8n.getaipilot.in/webhook/telegram_sync",
+  "source_channel_id": "-1004451682253",
+  "destination_channel_id": "-1004318725539",
+  "auto_post_telegram": true,
+  "text_prefix": "",
+  "text_suffix": "",
+  "find_text": "Bhim, https://bitli.in/GrE8Hm",
+  "replace_text": "Chotu,https://getaipilot.com",
+  "keyword_filter": "",
+  "filter_mode": "all",
+  "enabled": true
+}
