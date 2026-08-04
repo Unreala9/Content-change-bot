@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Telegram Sync Side-by-Side Channel Mirror Studio - JavaScript Logic
+   Telegram Sync & Side-by-Side Studio - JavaScript Application Logic
    ========================================================================== */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -14,7 +14,8 @@ document.addEventListener("DOMContentLoaded", () => {
         settings: {},
         messages: [],
         sourceHistory: [],
-        destHistory: []
+        destHistory: [],
+        replacementRules: [] // Array of {find: "", replace: ""}
     };
 
     // --- DOM Elements Cache ---
@@ -30,42 +31,45 @@ document.addEventListener("DOMContentLoaded", () => {
     const headerConnectionBadge = document.getElementById("headerConnectionBadge");
     const btnRefreshStatus = document.getElementById("btnRefreshStatus");
 
-    // Studio Toolbar Controls
+    // Studio Top Control Bar
     const selectSourceChannel = document.getElementById("selectSourceChannel");
-    const toggleAutoPost = document.getElementById("toggleAutoPost");
     const selectDestChannel = document.getElementById("selectDestChannel");
-    const btnStudioSendDirect = document.getElementById("btnStudioSendDirect");
+    const switchAutoTelegram = document.getElementById("switchAutoTelegram");
+    const btnQuickSend = document.getElementById("btnQuickSend");
 
-    // Studio Column 1: Source
-    const labelSourceChannelName = document.getElementById("labelSourceChannelName");
-    const badgeSourceId = document.getElementById("badgeSourceId");
-    const streamSourceFeed = document.getElementById("streamSourceFeed");
-    const btnRefreshSourceStream = document.getElementById("btnRefreshSourceStream");
+    // Studio Panel Headers
+    const sourceChannelSubtext = document.getElementById("sourceChannelSubtext");
+    const sourceIdBadge = document.getElementById("sourceIdBadge");
+    const sourceChatFeed = document.getElementById("sourceChatFeed");
+    const btnRefreshSourceChat = document.getElementById("btnRefreshSourceChat");
 
-    // Studio Column 2: Modifier Engine
-    const btnSaveStudioRules = document.getElementById("btnSaveStudioRules");
-    const studioWebhookUrl = document.getElementById("studioWebhookUrl");
+    const destChannelSubtext = document.getElementById("destChannelSubtext");
+    const destIdBadge = document.getElementById("destIdBadge");
+    const destChatFeed = document.getElementById("destChatFeed");
+    const btnRefreshDestChat = document.getElementById("btnRefreshDestChat");
+
+    // Studio Modifier Controls
+    const inputWebhookUrl = document.getElementById("inputWebhookUrl");
     const studioPrefix = document.getElementById("studioPrefix");
     const studioSuffix = document.getElementById("studioSuffix");
-    const studioFindText = document.getElementById("studioFindText");
-    const studioReplaceText = document.getElementById("studioReplaceText");
-    const studioFilterMode = document.getElementById("studioFilterMode");
-    const studioKeywordFilter = document.getElementById("studioKeywordFilter");
-    const studioSampleText = document.getElementById("studioSampleText");
-    const studioSandboxBadge = document.getElementById("studioSandboxBadge");
-    const studioSandboxResult = document.getElementById("studioSandboxResult");
-    const btnPostSandboxToDest = document.getElementById("btnPostSandboxToDest");
+    const studioFind = document.getElementById("studioFind");
+    const studioReplace = document.getElementById("studioReplace");
+    const selectFilterMode = document.getElementById("selectFilterMode");
+    const studioKeyword = document.getElementById("studioKeyword");
+    const studioTransformedPreview = document.getElementById("studioTransformedPreview");
+    const sandboxStatusBadge = document.getElementById("sandboxStatusBadge");
+    const btnSaveStudioRules = document.getElementById("btnSaveStudioRules");
 
-    // Studio Column 3: Destination
-    const labelDestChannelName = document.getElementById("labelDestChannelName");
-    const badgeDestId = document.getElementById("badgeDestId");
-    const streamDestFeed = document.getElementById("streamDestFeed");
-    const btnRefreshDestStream = document.getElementById("btnRefreshDestStream");
+    // Multi-Rules & Link Modifier Elements
+    const btnAddRuleRow = document.getElementById("btnAddRuleRow");
+    const rulesRowsContainer = document.getElementById("rulesRowsContainer");
+    const chkOverrideLinks = document.getElementById("chkOverrideLinks");
+    const inputCustomLinkUrl = document.getElementById("inputCustomLinkUrl");
+    const chkRemoveLinks = document.getElementById("chkRemoveLinks");
 
-    // Overview Tab
+    // Overview & Channels Tab Elements
     const statReceived = document.getElementById("statReceived");
     const statForwarded = document.getElementById("statForwarded");
-    const statAutoPosted = document.getElementById("statAutoPosted");
     const statFiltered = document.getElementById("statFiltered");
     const accountBadge = document.getElementById("accountBadge");
     const userAvatar = document.getElementById("userAvatar");
@@ -73,12 +77,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const userUsername = document.getElementById("userUsername");
     const userPhone = document.getElementById("userPhone");
     const overviewWebhookUrl = document.getElementById("overviewWebhookUrl");
+    const overviewRecentTable = document.getElementById("overviewRecentTable");
 
-    // Channels Tab
     const channelSearchInput = document.getElementById("channelSearchInput");
     const filterPills = document.querySelectorAll(".filter-pill");
     const btnFetchChannels = document.getElementById("btnFetchChannels");
     const channelsGrid = document.getElementById("channelsGrid");
+
+    // Settings Tab Elements
+    const settingsForm = document.getElementById("settingsForm");
+    const inputWebhookUrlAlt = document.getElementById("inputWebhookUrlAlt");
+    const inputPrefix = document.getElementById("inputPrefix");
+    const inputSuffix = document.getElementById("inputSuffix");
+    const btnSaveSettings = document.getElementById("btnSaveSettings");
+    const btnGoToSettings = document.getElementById("btnGoToSettings");
+
+    // Sandbox Preview
+    const sandboxSampleText = document.getElementById("sandboxSampleText");
+    const sandboxResultText = document.getElementById("sandboxResultText");
 
     // Logs Tab
     const fullLogsTable = document.getElementById("fullLogsTable");
@@ -102,13 +118,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const sendDestinationChat = document.getElementById("sendDestinationChat");
     const sendDestinationId = document.getElementById("sendDestinationId");
     const sendMessageText = document.getElementById("sendMessageText");
-    const btnSubmitSend = document.getElementById("btnSubmitSend");
+
+    // Sample text for live modifier tester
+    let activeSampleMessageText = "Bhim 2 hour Loot\n\nSend ₹20 or more and get upto ₹20 Cashback\n\nDate: 20th December, 2025\nTime: 3:00 PM to 5:00 PM\n\nDownload Now: https://bitli.in/GrE8HmE\n\nValid Once Per User";
 
     // --- Tab Navigation Setup ---
     const tabMetaData = {
-        "tab-studio": { title: "Side-by-Side Channel Mirror Studio", subtitle: "Extract from Source Channel ➔ Modify with Engine ➔ Post to Destination Channel" },
+        "tab-studio": { title: "Side-by-Side Sync Studio", subtitle: "Source Channel Extract ➔ Live Modifier Engine ➔ Destination Channel Paste" },
         "tab-overview": { title: "Dashboard Overview", subtitle: "Real-time Telegram message listener & n8n webhook automation" },
         "tab-channels": { title: "Channels & Chats Explorer", subtitle: "Browse, filter, and compose messages to your Telegram channels and chats" },
+        "tab-n8n": { title: "n8n Webhook & Rules Engine", subtitle: "Configure dynamic text transformations, filters, and test rules live" },
         "tab-logs": { title: "Live Sync Activity Feed", subtitle: "Real-time stream of intercepted messages and n8n webhook responses" }
     };
 
@@ -132,12 +151,70 @@ document.addEventListener("DOMContentLoaded", () => {
                 fetchChannels();
             } else if (targetTab === "tab-logs") {
                 fetchMessages();
-            } else if (targetTab === "tab-studio") {
-                fetchSourceStream();
-                fetchDestStream();
             }
         });
     });
+
+    if (btnGoToSettings) {
+        btnGoToSettings.addEventListener("click", () => {
+            const n8nNavBtn = document.querySelector('[data-tab="tab-n8n"]');
+            if (n8nNavBtn) n8nNavBtn.click();
+        });
+    }
+
+    // --- Dynamic Multi-Rule UI Renderer ---
+    function renderRuleRows() {
+        if (!rulesRowsContainer) return;
+
+        if (state.replacementRules.length === 0) {
+            rulesRowsContainer.innerHTML = '<div class="text-muted" style="font-size: 11px; padding: 4px 0;">No individual rules added. Click "+ Add Rule" above or use quick mode below.</div>';
+            return;
+        }
+
+        rulesRowsContainer.innerHTML = state.replacementRules.map((rule, idx) => `
+            <div class="rule-row-item">
+                <input type="text" class="form-control rule-find-input" data-idx="${idx}" placeholder="Find word" value="${escapeAttribute(rule.find || '')}">
+                <input type="text" class="form-control rule-replace-input" data-idx="${idx}" placeholder="Replace with" value="${escapeAttribute(rule.replace || '')}">
+                <button type="button" class="btn-delete-rule" data-idx="${idx}" title="Delete Rule">
+                    <i class="fa-solid fa-trash-can"></i>
+                </button>
+            </div>
+        `).join("");
+
+        // Attach listeners for dynamic input edits
+        document.querySelectorAll(".rule-find-input").forEach(input => {
+            input.addEventListener("input", (e) => {
+                const idx = parseInt(e.target.getAttribute("data-idx"));
+                state.replacementRules[idx].find = e.target.value;
+                updateStudioSandbox();
+            });
+        });
+
+        document.querySelectorAll(".rule-replace-input").forEach(input => {
+            input.addEventListener("input", (e) => {
+                const idx = parseInt(e.target.getAttribute("data-idx"));
+                state.replacementRules[idx].replace = e.target.value;
+                updateStudioSandbox();
+            });
+        });
+
+        document.querySelectorAll(".btn-delete-rule").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                const idx = parseInt(btn.getAttribute("data-idx"));
+                state.replacementRules.splice(idx, 1);
+                renderRuleRows();
+                updateStudioSandbox();
+            });
+        });
+    }
+
+    if (btnAddRuleRow) {
+        btnAddRuleRow.addEventListener("click", () => {
+            state.replacementRules.push({ find: "", replace: "" });
+            renderRuleRows();
+            updateStudioSandbox();
+        });
+    }
 
     // --- API Service Calls ---
     async function fetchStatus() {
@@ -149,10 +226,16 @@ document.addEventListener("DOMContentLoaded", () => {
             state.authorized = data.authorized;
             state.user = data.user;
             state.settings = data.settings || {};
+            state.replacementRules = data.settings.replacement_rules || [];
 
             updateStatusUI(data);
             populateSettingsUI(data.settings);
-            updateSandboxPreview();
+            renderRuleRows();
+            updateStudioSandbox();
+            
+            if (state.channels.length === 0) {
+                fetchChannels();
+            }
         } catch (err) {
             console.error("Error fetching status:", err);
             sidebarStatusTitle.textContent = "Offline";
@@ -171,16 +254,14 @@ document.addEventListener("DOMContentLoaded", () => {
             headerConnectionBadge.className = "pill-badge status-connected";
             headerConnectionBadge.innerHTML = '<i class="fa-solid fa-wifi"></i> Connected';
 
-            if (accountBadge) {
-                accountBadge.className = "badge badge-success";
-                accountBadge.textContent = "Signed In";
-            }
+            accountBadge.className = "badge badge-success";
+            accountBadge.textContent = "Signed In";
 
-            if (data.user && userName) {
-                userName.textContent = `${data.user.first_name} ${data.user.last_name || ""}`.trim();
-                if (userUsername) userUsername.textContent = data.user.username ? `@${data.user.username}` : "No username";
-                if (userPhone) userPhone.textContent = `Phone: +${data.user.phone}`;
-                if (userAvatar) userAvatar.textContent = (data.user.first_name || "T")[0].toUpperCase();
+            if (data.user) {
+                userName.textContent = `${data.user.first_name} ${data.user.last_name}`.trim();
+                userUsername.textContent = data.user.username ? `@${data.user.username}` : "No username";
+                userPhone.textContent = `Phone: +${data.user.phone}`;
+                userAvatar.textContent = (data.user.first_name || "T")[0].toUpperCase();
             }
         } else {
             sidebarStatusTitle.textContent = "Disconnected / Not Signed In";
@@ -190,177 +271,167 @@ document.addEventListener("DOMContentLoaded", () => {
             headerConnectionBadge.className = "pill-badge status-disconnected";
             headerConnectionBadge.innerHTML = '<i class="fa-solid fa-plug"></i> Not Authenticated';
 
-            if (accountBadge) {
-                accountBadge.className = "badge badge-danger";
-                accountBadge.textContent = "Signed Out";
-            }
-            if (userName) userName.textContent = "Not Signed In";
-            if (userUsername) userUsername.textContent = "Click button below to sign in";
-            if (userPhone) userPhone.textContent = "--";
-            if (userAvatar) userAvatar.textContent = "?";
+            accountBadge.className = "badge badge-danger";
+            accountBadge.textContent = "Signed Out";
+            userName.textContent = "Not Signed In";
+            userUsername.textContent = "Click button below to sign in";
+            userPhone.textContent = "--";
+            userAvatar.textContent = "?";
         }
 
         if (data.stats) {
-            if (statReceived) statReceived.textContent = data.stats.received || 0;
-            if (statForwarded) statForwarded.textContent = data.stats.forwarded || 0;
-            if (statAutoPosted) statAutoPosted.textContent = data.stats.auto_posted || 0;
-            if (statFiltered) statFiltered.textContent = data.stats.filtered || 0;
+            statReceived.textContent = data.stats.received || 0;
+            statForwarded.textContent = data.stats.forwarded || 0;
+            statFiltered.textContent = data.stats.filtered || 0;
         }
     }
 
-    // --- Channels System & Dropdowns ---
+    // --- Channels System ---
     async function fetchChannels() {
-        if (channelsGrid) {
-            channelsGrid.innerHTML = `
-                <div class="loading-spinner-container">
-                    <i class="fa-solid fa-spinner fa-spin"></i> Loading dialogs & channels from Telegram...
-                </div>
-            `;
-        }
         try {
             const res = await fetch("/api/channels");
             const data = await res.json();
             if (data.success) {
                 state.channels = data.channels || [];
-                renderChannelsGrid();
                 populateStudioDropdowns();
+                renderChannelsGrid();
             }
         } catch (err) {
             console.error("Error fetching channels:", err);
-            if (channelsGrid) {
-                channelsGrid.innerHTML = `
-                    <div class="card glass-card text-center" style="padding: 30px;">
-                        <i class="fa-solid fa-triangle-exclamation" style="font-size: 32px; color: var(--accent-orange); margin-bottom: 12px;"></i>
-                        <h4>Unable to load Telegram channels</h4>
-                        <p class="text-muted">Ensure your Telegram account is authenticated.</p>
-                    </div>
-                `;
-            }
         }
     }
 
     function populateStudioDropdowns() {
         if (!selectSourceChannel || !selectDestChannel) return;
 
-        let sourceHtml = '<option value="all">⚡ All Incoming Channels & Chats</option>';
-        let destHtml = '<option value="">Select Destination Channel...</option>';
-
-        state.channels.forEach(ch => {
-            let icon = ch.is_channel ? "📢" : (ch.is_group ? "👥" : "👤");
-            sourceHtml += `<option value="${ch.id}">${icon} ${escapeHtml(ch.name)} (${ch.type})</option>`;
-            destHtml += `<option value="${ch.id}">${icon} ${escapeHtml(ch.name)} (${ch.type})</option>`;
-        });
-
         const currentSource = state.settings.source_channel_id || "all";
         const currentDest = state.settings.destination_channel_id || "";
 
-        selectSourceChannel.innerHTML = sourceHtml;
-        selectSourceChannel.value = currentSource;
+        let sourceOptions = '<option value="all">⚡ All Incoming Chats (Global Extract)</option>';
+        let destOptions = '<option value="">-- Select Destination Channel --</option>';
 
-        selectDestChannel.innerHTML = destHtml;
-        selectDestChannel.value = currentDest;
+        state.channels.forEach(ch => {
+            const selectedSource = (ch.id === currentSource) ? 'selected' : '';
+            const selectedDest = (ch.id === currentDest) ? 'selected' : '';
 
-        updateStudioChannelLabels();
-        fetchSourceStream();
-        fetchDestStream();
+            sourceOptions += `<option value="${ch.id}" ${selectedSource}>${escapeHtml(ch.name)} (${ch.type})</option>`;
+            destOptions += `<option value="${ch.id}" ${selectedDest}>${escapeHtml(ch.name)} (${ch.type})</option>`;
+        });
+
+        selectSourceChannel.innerHTML = sourceOptions;
+        selectDestChannel.innerHTML = destOptions;
+
+        updateStudioPanelCards();
     }
 
-    function updateStudioChannelLabels() {
+    function updateStudioPanelCards() {
         const sourceVal = selectSourceChannel.value;
         const destVal = selectDestChannel.value;
 
         if (sourceVal === "all") {
-            labelSourceChannelName.textContent = "Listening to All Chats";
-            badgeSourceId.textContent = "ALL";
+            sourceChannelSubtext.textContent = "Global Extractor";
+            sourceIdBadge.textContent = "ALL_CHATS";
+            fetchSourceHistory("all");
         } else {
-            const foundSource = state.channels.find(c => String(c.id) === String(sourceVal));
-            labelSourceChannelName.textContent = foundSource ? foundSource.name : `Chat ID: ${sourceVal}`;
-            badgeSourceId.textContent = sourceVal;
+            const found = state.channels.find(c => c.id === sourceVal);
+            if (found) {
+                sourceChannelSubtext.textContent = found.name;
+                sourceIdBadge.textContent = found.id;
+                fetchSourceHistory(found.id);
+            }
         }
 
         if (!destVal) {
-            labelDestChannelName.textContent = "No Destination Selected";
-            badgeDestId.textContent = "NONE";
-            badgeDestId.className = "badge badge-warning";
+            destChannelSubtext.textContent = "Select Target";
+            destIdBadge.textContent = "NO_TARGET";
+            destChatFeed.innerHTML = '<div class="loading-spinner-container text-muted"><i class="fa-solid fa-arrow-right-to-bracket"></i> Select destination channel in top control bar...</div>';
         } else {
-            const foundDest = state.channels.find(c => String(c.id) === String(destVal));
-            labelDestChannelName.textContent = foundDest ? foundDest.name : `Chat ID: ${destVal}`;
-            badgeDestId.textContent = destVal;
-            badgeDestId.className = "badge badge-success";
+            const found = state.channels.find(c => c.id === destVal);
+            if (found) {
+                destChannelSubtext.textContent = found.name;
+                destIdBadge.textContent = found.id;
+                fetchDestHistory(found.id);
+            }
         }
     }
 
-    // --- Stream Feeds (Source & Destination History) ---
-    async function fetchSourceStream() {
-        const sourceVal = selectSourceChannel.value;
-        if (sourceVal === "all") {
-            renderSourceStream(state.messages);
+    selectSourceChannel.addEventListener("change", updateStudioPanelCards);
+    selectDestChannel.addEventListener("change", updateStudioPanelCards);
+
+    if (btnQuickSend) {
+        btnQuickSend.addEventListener("click", () => {
+            const destVal = selectDestChannel.value;
+            if (!destVal) return alert("Please select a Destination Channel first!");
+            const found = state.channels.find(c => c.id === destVal);
+            openSendMessageModal(destVal, found ? found.name : destVal);
+        });
+    }
+
+    // --- Chat History Fetchers ---
+    async function fetchSourceHistory(chatId) {
+        if (chatId === "all") {
+            renderSourceChatFeed(state.messages.map(m => ({
+                id: m.id || 1,
+                text: m.raw_message,
+                sender_name: m.chat_name,
+                date: m.date
+            })));
             return;
         }
 
+        sourceChatFeed.innerHTML = '<div class="loading-spinner-container"><i class="fa-solid fa-spinner fa-spin"></i> Loading source messages...</div>';
         try {
-            const res = await fetch(`/api/channel-history?chat_id=${encodeURIComponent(sourceVal)}&limit=25`);
+            const res = await fetch(`/api/history/${chatId}`);
             const data = await res.json();
             if (data.success) {
                 state.sourceHistory = data.messages || [];
-                renderSourceStream(state.sourceHistory);
+                const found = state.channels.find(c => c.id === chatId);
+                renderSourceChatFeed(state.sourceHistory, found ? found.name : 'Source');
             }
         } catch (err) {
-            console.error("Error fetching source history:", err);
+            sourceChatFeed.innerHTML = `<div class="text-muted text-center" style="padding: 20px;">Error loading messages: ${err}</div>`;
         }
     }
 
-    async function fetchDestStream() {
-        const destVal = selectDestChannel.value;
-        if (!destVal) {
-            streamDestFeed.innerHTML = `
-                <div class="stream-empty">
-                    <i class="fa-solid fa-paper-plane"></i>
-                    <p>Select a Destination Channel above to view posts...</p>
-                </div>
-            `;
-            return;
-        }
+    async function fetchDestHistory(chatId) {
+        if (!chatId) return;
 
+        destChatFeed.innerHTML = '<div class="loading-spinner-container"><i class="fa-solid fa-spinner fa-spin"></i> Loading destination messages...</div>';
         try {
-            const res = await fetch(`/api/channel-history?chat_id=${encodeURIComponent(destVal)}&limit=25`);
+            const res = await fetch(`/api/history/${chatId}`);
             const data = await res.json();
             if (data.success) {
                 state.destHistory = data.messages || [];
-                renderDestStream(state.destHistory);
+                const found = state.channels.find(c => c.id === chatId);
+                renderDestChatFeed(state.destHistory, found ? found.name : 'Target');
             }
         } catch (err) {
-            console.error("Error fetching dest history:", err);
+            destChatFeed.innerHTML = `<div class="text-muted text-center" style="padding: 20px;">Error loading target messages: ${err}</div>`;
         }
     }
 
-    function renderSourceStream(messages) {
+    function renderSourceChatFeed(messages, defaultChannelName = 'Source') {
         if (!messages || messages.length === 0) {
-            streamSourceFeed.innerHTML = `
-                <div class="stream-empty">
-                    <i class="fa-solid fa-wave-square"></i>
-                    <p>No messages found in source channel feed.</p>
-                </div>
-            `;
+            sourceChatFeed.innerHTML = '<div class="text-muted text-center" style="padding: 20px;">No messages found in source channel.</div>';
             return;
         }
 
-        streamSourceFeed.innerHTML = messages.map(m => {
-            const rawText = m.text || m.raw_message || "";
-            const sender = m.sender_name || m.chat_name || "Source Channel";
-            const dateStr = m.date || "";
+        sourceChatFeed.innerHTML = messages.map((m, index) => {
+            const channelName = m.sender_name || defaultChannelName;
+            const text = m.text || m.raw_message || '';
+            const msgId = m.id || (index + 1);
 
             return `
-                <div class="tg-bubble">
-                    <div class="tg-bubble-sender">
-                        <span><i class="fa-solid fa-download text-blue"></i> ${escapeHtml(sender)}</span>
-                        <span class="tg-status-subtitle">${escapeHtml(dateStr)}</span>
+                <div class="source-message-card">
+                    <div class="msg-card-header">
+                        <span class="msg-sender-title"><i class="fa-solid fa-inbox text-blue"></i> ${escapeHtml(channelName)}</span>
+                        <span class="msg-timestamp">${m.date || ''}</span>
                     </div>
-                    <div class="tg-bubble-text">${escapeHtml(rawText)}</div>
-                    <div class="tg-bubble-meta">
-                        <span>ID: ${m.id}</span>
-                        <button class="tg-bubble-action-btn btn-load-modifier" data-text="${escapeHtml(rawText)}">
-                            <i class="fa-solid fa-wand-magic-sparkles"></i> Load into Modifier
+                    <div class="msg-card-body">${escapeHtml(text)}</div>
+                    <div class="msg-card-footer">
+                        <span class="badge badge-id-blue">ID: ${msgId}</span>
+                        <button class="btn-load-modifier" data-text="${escapeAttribute(text)}">
+                            <i class="fa-solid fa-code-branch"></i> % Load into Modifier
                         </button>
                     </div>
                 </div>
@@ -370,99 +441,86 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".btn-load-modifier").forEach(btn => {
             btn.addEventListener("click", () => {
                 const text = btn.getAttribute("data-text");
-                studioSampleText.value = text;
-                updateSandboxPreview();
-                if (rulesDrawerModal) rulesDrawerModal.classList.add("active");
+                activeSampleMessageText = text;
+                updateStudioSandbox();
+                studioTransformedPreview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             });
         });
     }
 
-    function renderDestStream(messages) {
+    function renderDestChatFeed(messages, defaultChannelName = 'Target') {
         if (!messages || messages.length === 0) {
-            streamDestFeed.innerHTML = `
-                <div class="stream-empty">
-                    <i class="fa-solid fa-paper-plane"></i>
-                    <p>No posts in destination stream yet.</p>
-                </div>
-            `;
+            destChatFeed.innerHTML = '<div class="text-muted text-center" style="padding: 20px;">No messages posted to destination yet.</div>';
             return;
         }
 
-        streamDestFeed.innerHTML = messages.map(m => {
-            const text = m.text || m.transformed_message || "";
-            const sender = m.sender_name || "Destination Channel";
-            const dateStr = m.date || "";
-
-            return `
-                <div class="tg-bubble tg-bubble-dest">
-                    <div class="tg-bubble-sender">
-                        <span><i class="fa-solid fa-circle-check"></i> ${escapeHtml(sender)}</span>
-                        <span style="font-weight: normal; opacity: 0.7;">${escapeHtml(dateStr)}</span>
-                    </div>
-                    <div class="tg-bubble-text">${escapeHtml(text)}</div>
-                    <div class="tg-bubble-meta">
-                        <span class="badge badge-success">✓✓ Posted</span>
-                    </div>
+        destChatFeed.innerHTML = messages.map(m => `
+            <div class="dest-message-card">
+                <div class="msg-card-header">
+                    <span class="msg-sender-title"><i class="fa-solid fa-circle-check text-green"></i> ${escapeHtml(defaultChannelName)}</span>
+                    <span class="msg-timestamp">${m.date || ''}</span>
                 </div>
-            `;
-        }).join("");
+                <div class="msg-card-body">${escapeHtml(m.text || m.raw_message || '')}</div>
+                <div class="msg-card-footer">
+                    <span class="badge badge-success">Posted</span>
+                </div>
+            </div>
+        `).join("");
     }
 
-    // --- Toolbar Actions & Event Handlers ---
-    if (selectSourceChannel) {
-        selectSourceChannel.addEventListener("change", async () => {
-            updateStudioChannelLabels();
-            await fetch("/api/config", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ source_channel_id: selectSourceChannel.value })
-            });
-            fetchSourceStream();
-        });
+    if (btnRefreshSourceChat) btnRefreshSourceChat.addEventListener("click", () => updateStudioPanelCards());
+    if (btnRefreshDestChat) btnRefreshDestChat.addEventListener("click", () => updateStudioPanelCards());
+
+    // --- Settings & Text Rules Engine ---
+    function populateSettingsUI(settings) {
+        if (!settings) return;
+
+        inputWebhookUrl.value = settings.webhook_url || "";
+        if (inputWebhookUrlAlt) inputWebhookUrlAlt.value = settings.webhook_url || "";
+        inputPrefix.value = settings.text_prefix || "";
+        inputSuffix.value = settings.text_suffix || "";
+        inputFindText.value = settings.find_text || "";
+        inputReplaceText.value = settings.replace_text || "";
+        selectFilterMode.value = settings.filter_mode || "all";
+
+        switchAutoTelegram.checked = settings.auto_post_telegram ?? true;
+        studioPrefix.value = settings.text_prefix || "";
+        studioSuffix.value = settings.text_suffix || "";
+        studioFind.value = settings.find_text || "";
+        studioReplace.value = settings.replace_text || "";
+        studioKeyword.value = settings.keyword_filter || "";
+
+        chkOverrideLinks.checked = settings.override_all_links ?? false;
+        inputCustomLinkUrl.value = settings.custom_link_url || "";
+        chkRemoveLinks.checked = settings.remove_all_links ?? false;
+
+        if (overviewWebhookUrl) {
+            overviewWebhookUrl.textContent = settings.webhook_url || "Not Configured";
+        }
     }
 
-    if (selectDestChannel) {
-        selectDestChannel.addEventListener("change", async () => {
-            updateStudioChannelLabels();
-            await fetch("/api/config", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ destination_channel_id: selectDestChannel.value })
-            });
-            fetchDestStream();
-        });
-    }
-
-    if (toggleAutoPost) {
-        toggleAutoPost.addEventListener("change", async () => {
-            try {
-                await fetch("/api/config", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ auto_post_telegram: toggleAutoPost.checked })
-                });
-            } catch (err) {
-                console.error("Error updating auto-post toggle:", err);
-            }
-        });
-    }
-
+    // Save Studio Rules
     if (btnSaveStudioRules) {
         btnSaveStudioRules.addEventListener("click", async () => {
             btnSaveStudioRules.disabled = true;
             btnSaveStudioRules.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
 
             const payload = {
-                webhook_url: studioWebhookUrl.value,
+                webhook_url: inputWebhookUrl.value,
+                source_channel_id: selectSourceChannel.value,
+                destination_channel_id: selectDestChannel.value,
+                auto_post_telegram: switchAutoTelegram.checked,
+                auto_post_n8n: true,
                 text_prefix: studioPrefix.value,
                 text_suffix: studioSuffix.value,
-                find_text: studioFindText.value,
-                replace_text: studioReplaceText.value,
-                filter_mode: studioFilterMode.value,
-                keyword_filter: studioKeywordFilter.value,
-                auto_post_telegram: toggleAutoPost.checked,
-                source_channel_id: selectSourceChannel.value,
-                destination_channel_id: selectDestChannel.value
+                find_text: studioFind.value,
+                replace_text: studioReplace.value,
+                replacement_rules: state.replacementRules,
+                override_all_links: chkOverrideLinks.checked,
+                custom_link_url: inputCustomLinkUrl.value,
+                remove_all_links: chkRemoveLinks.checked,
+                keyword_filter: studioKeyword.value,
+                filter_mode: selectFilterMode.value
             };
 
             try {
@@ -474,11 +532,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 const data = await res.json();
                 if (data.success) {
                     state.settings = data.settings;
-                    alert("✅ Modifier Rules & Preferences Saved Successfully!");
-                    if (rulesDrawerModal) rulesDrawerModal.classList.remove("active");
+                    populateSettingsUI(data.settings);
+                    alert("✅ Multi-Rule Modifier Engine Settings Saved!");
                 }
             } catch (err) {
-                alert("❌ Error saving rules: " + err);
+                alert("❌ Error saving studio rules: " + err);
             } finally {
                 btnSaveStudioRules.disabled = false;
                 btnSaveStudioRules.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Rules';
@@ -486,55 +544,60 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    if (btnPostSandboxToDest) {
-        btnPostSandboxToDest.addEventListener("click", async () => {
-            const destId = selectDestChannel.value || state.settings.destination_channel_id;
-            if (!destId) {
-                return alert("⚠️ Please select a Destination Channel from the top dropdown first!");
-            }
-            const textToSend = studioSandboxResult.textContent.trim();
-            if (!textToSend || textToSend === "(empty)") {
-                return alert("⚠️ Sandbox preview text is empty!");
-            }
+    // --- Live Studio Sandbox Preview (Multi-Rule & Smart Link Engine) ---
+    function updateStudioSandbox() {
+        let text = activeSampleMessageText;
 
-            btnPostSandboxToDest.disabled = true;
-            btnPostSandboxToDest.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Posting...';
-
-            try {
-                const res = await fetch("/api/send", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ destination_chat_id: destId, message: textToSend })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    alert("🚀 Modified message successfully posted to Destination Channel!");
-                    fetchDestStream();
-                } else {
-                    alert("❌ Failed to post message: " + (data.detail || "Unknown error"));
+        // 1. Structured Multi-Rules
+        if (state.replacementRules && state.replacementRules.length > 0) {
+            state.replacementRules.forEach(rule => {
+                if (rule.find) {
+                    text = text.replace(new RegExp(escapeRegExp(rule.find), 'g'), rule.replace || '');
                 }
-            } catch (err) {
-                alert("❌ Error posting message: " + err);
-            } finally {
-                btnPostSandboxToDest.disabled = false;
-                btnPostSandboxToDest.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Modified Message to Destination';
-            }
-        });
+            });
+        }
+
+        // 2. Bulk Comma-Separated Mode
+        const findVal = studioFind.value;
+        const replaceVal = studioReplace.value;
+
+        if (findVal) {
+            const findList = findVal.split(",").map(f => f.trim()).filter(f => f);
+            const replaceList = replaceVal.split(",").map(r => r.trim());
+
+            findList.forEach((fWord, i) => {
+                const rWord = (i < replaceList.length) ? replaceList[i] : (replaceList.length > 0 ? replaceList[replaceList.length - 1] : "");
+                text = text.replace(new RegExp(escapeRegExp(fWord), 'g'), rWord);
+            });
+        }
+
+        // 3. Smart Universal Link Override / Link Removal
+        const urlPattern = /https?:\/\/[^\s<>"'\)]+/g;
+        if (chkRemoveLinks && chkRemoveLinks.checked) {
+            text = text.replace(urlPattern, '');
+        } else if (chkOverrideLinks && chkOverrideLinks.checked && inputCustomLinkUrl.value.trim()) {
+            text = text.replace(urlPattern, inputCustomLinkUrl.value.trim());
+        }
+
+        // 4. Prefix & Suffix
+        const prefixVal = studioPrefix.value;
+        const suffixVal = studioSuffix.value;
+
+        if (prefixVal) text = `${prefixVal}${text}`;
+        if (suffixVal) text = `${text}${suffixVal}`;
+
+        studioTransformedPreview.textContent = text;
+        if (sandboxResultText) sandboxResultText.textContent = text;
     }
 
-    if (btnStudioSendDirect) {
-        btnStudioSendDirect.addEventListener("click", () => {
-            const destId = selectDestChannel.value;
-            if (!destId) return alert("⚠️ Select a destination channel first!");
-            const found = state.channels.find(c => String(c.id) === String(destId));
-            openSendMessageModal(destId, found ? found.name : destId);
-        });
-    }
+    [studioPrefix, studioSuffix, studioFind, studioReplace, studioKeyword, selectFilterMode, chkOverrideLinks, inputCustomLinkUrl, chkRemoveLinks].forEach(el => {
+        if (el) {
+            el.addEventListener("input", updateStudioSandbox);
+            el.addEventListener("change", updateStudioSandbox);
+        }
+    });
 
-    if (btnRefreshSourceStream) btnRefreshSourceStream.addEventListener("click", fetchSourceStream);
-    if (btnRefreshDestStream) btnRefreshDestStream.addEventListener("click", fetchDestStream);
-
-    // --- Channels Grid Rendering (Directory Tab) ---
+    // --- Channels Explorer UI ---
     function renderChannelsGrid() {
         if (!channelsGrid) return;
         let filtered = state.channels;
@@ -553,7 +616,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="card glass-card text-center full-width-card" style="padding: 40px; grid-column: 1 / -1;">
                     <i class="fa-solid fa-comments" style="font-size: 36px; color: var(--text-muted); margin-bottom: 12px;"></i>
                     <h4>No chats found matching criteria</h4>
-                    <p class="text-muted">Try adjusting your search query or filter pill.</p>
                 </div>
             `;
             return;
@@ -610,75 +672,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (btnFetchChannels) btnFetchChannels.addEventListener("click", fetchChannels);
 
-    // --- Settings Population ---
-    function populateSettingsUI(settings) {
-        if (!settings) return;
-        studioWebhookUrl.value = settings.webhook_url || "";
-        studioPrefix.value = settings.text_prefix || "";
-        studioSuffix.value = settings.text_suffix || "";
-        studioFindText.value = settings.find_text || "";
-        studioReplaceText.value = settings.replace_text || "";
-        studioFilterMode.value = settings.filter_mode || "all";
-        studioKeywordFilter.value = settings.keyword_filter || "";
-        toggleAutoPost.checked = !!settings.auto_post_telegram;
-
-        if (overviewWebhookUrl) {
-            overviewWebhookUrl.textContent = settings.webhook_url || "Not Configured";
-        }
-    }
-
-    // --- Live Sandbox Preview Tester ---
-    async function updateSandboxPreview() {
-        const sampleText = studioSampleText.value || "";
-        const payload = {
-            sample_text: sampleText,
-            text_prefix: studioPrefix.value,
-            text_suffix: studioSuffix.value,
-            find_text: studioFindText.value,
-            replace_text: studioReplaceText.value,
-            filter_mode: studioFilterMode.value,
-            keyword_filter: studioKeywordFilter.value
-        };
-
-        try {
-            const res = await fetch("/api/test-transform", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-
-            studioSandboxResult.textContent = data.transformed_text || "(empty)";
-
-            if (data.should_forward) {
-                studioSandboxBadge.className = "badge badge-success";
-                studioSandboxBadge.textContent = "Forward Allowed";
-            } else {
-                studioSandboxBadge.className = "badge badge-warning";
-                studioSandboxBadge.textContent = "Skipped / Filtered";
-            }
-        } catch (err) {
-            console.error("Sandbox preview error:", err);
-        }
-    }
-
-    [studioSampleText, studioPrefix, studioSuffix, studioFindText, studioReplaceText, studioKeywordFilter, studioFilterMode].forEach(el => {
-        if (el) {
-            el.addEventListener("input", updateSandboxPreview);
-            el.addEventListener("change", updateSandboxPreview);
-        }
-    });
-
-    // --- Logs Stream ---
+    // --- Live Messages Stream ---
     async function fetchMessages() {
         try {
             const res = await fetch("/api/messages");
             const data = await res.json();
             if (data.success) {
                 state.messages = data.messages || [];
-                renderLogsTable(state.messages);
+                renderMessagesTables(state.messages);
+
                 if (selectSourceChannel && selectSourceChannel.value === "all") {
-                    renderSourceStream(state.messages);
+                    renderSourceChatFeed(state.messages.map(m => ({
+                        id: m.id,
+                        text: m.raw_message,
+                        sender_name: m.chat_name,
+                        date: m.date
+                    })));
                 }
             }
         } catch (err) {
@@ -686,11 +695,24 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function renderLogsTable(messages) {
+    function renderMessagesTables(messages) {
         if (!messages || messages.length === 0) {
-            if (fullLogsTable) fullLogsTable.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No messages intercepted yet.</td></tr>';
+            const emptyHtml = '<tr><td colspan="6" class="text-center text-muted">No messages intercepted yet.</td></tr>';
+            if (overviewRecentTable) overviewRecentTable.innerHTML = emptyHtml;
+            if (fullLogsTable) fullLogsTable.innerHTML = emptyHtml;
             return;
         }
+
+        const overviewRows = messages.slice(0, 5).map(m => `
+            <tr>
+                <td>${m.date}</td>
+                <td><strong>${escapeHtml(m.chat_name)}</strong></td>
+                <td><code>${escapeHtml(m.raw_message)}</code></td>
+                <td><code style="color: var(--accent-green);">${escapeHtml(m.transformed_message)}</code></td>
+                <td><span class="badge ${m.status.includes('sent') || m.status.includes('synced') ? 'badge-success' : 'badge-warning'}">${m.status}</span></td>
+            </tr>
+        `).join("");
+        if (overviewRecentTable) overviewRecentTable.innerHTML = overviewRows;
 
         const fullRows = messages.map(m => `
             <tr>
@@ -699,7 +721,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td><span class="channel-id-tag">${m.chat_id}</span></td>
                 <td><code>${escapeHtml(m.raw_message)}</code></td>
                 <td><code style="color: var(--accent-green);">${escapeHtml(m.transformed_message)}</code></td>
-                <td><span class="badge ${m.status.includes('sent') ? 'badge-success' : 'badge-warning'}">${m.status}</span></td>
+                <td><span class="badge ${m.status.includes('sent') || m.status.includes('synced') ? 'badge-success' : 'badge-warning'}">${m.status}</span></td>
             </tr>
         `).join("");
         if (fullLogsTable) fullLogsTable.innerHTML = fullRows;
@@ -713,6 +735,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnCloseLoginModal) btnCloseLoginModal.addEventListener("click", () => loginModal.classList.remove("active"));
     if (btnCloseSendModal) btnCloseSendModal.addEventListener("click", () => sendMessageModal.classList.remove("active"));
 
+    // Send Phone Code
     if (btnSendPhoneCode) {
         btnSendPhoneCode.addEventListener("click", async () => {
             const phone = loginPhoneNumber.value.trim();
@@ -743,6 +766,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Verify Phone Code
     if (btnVerifyCode) {
         btnVerifyCode.addEventListener("click", async () => {
             const phone = loginPhoneNumber.value.trim();
@@ -765,7 +789,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     alert("🎉 Logged in successfully!");
                     loginModal.classList.remove("active");
                     fetchStatus();
-                    fetchChannels();
                 } else {
                     alert("Error: " + (data.detail || "Invalid code"));
                 }
@@ -773,11 +796,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 alert("Error: " + err);
             } finally {
                 btnVerifyCode.disabled = false;
-                btnVerifyCode.innerHTML = '<i class="fa-solid fa-check"></i> Sign In to Telegram';
+                btnVerifyCode.innerHTML = '<i class="fa-solid fa-check"></i> Sign In';
             }
         });
     }
 
+    // Open Send Message Modal
     function openSendMessageModal(chatId, chatName) {
         sendDestinationId.value = chatId;
         sendDestinationChat.value = `${chatName} (${chatId})`;
@@ -805,7 +829,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (data.success) {
                     alert("✅ Message sent successfully!");
                     sendMessageModal.classList.remove("active");
-                    fetchDestStream();
+                    updateStudioPanelCards();
                 }
             } catch (err) {
                 alert("❌ Error sending message: " + err);
@@ -816,29 +840,23 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // Rules Drawer Modal Handlers
-    const rulesDrawerModal = document.getElementById("rulesDrawerModal");
-    const btnOpenRulesModal = document.getElementById("btnOpenRulesModal");
-    const btnBridgeOpenRules = document.getElementById("btnBridgeOpenRules");
-    const btnCloseRulesDrawer = document.getElementById("btnCloseRulesDrawer");
-
-    if (btnOpenRulesModal) btnOpenRulesModal.addEventListener("click", () => rulesDrawerModal && rulesDrawerModal.classList.add("active"));
-    if (btnBridgeOpenRules) btnBridgeOpenRules.addEventListener("click", () => rulesDrawerModal && rulesDrawerModal.classList.add("active"));
-    if (btnCloseRulesDrawer) btnCloseRulesDrawer.addEventListener("click", () => rulesDrawerModal && rulesDrawerModal.classList.remove("active"));
-
+    // Helper Utilities
     function escapeHtml(str) {
         if (!str) return "";
-        return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
 
-    // --- Init Application Data ---
-    fetchStatus();
-    fetchChannels();
-    fetchMessages();
-    setInterval(() => {
-        fetchMessages();
-        fetchSourceStream();
-        fetchDestStream();
-    }, 4000);
-});
+    function escapeAttribute(str) {
+        if (!str) return "";
+        return str.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
 
+    function escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    // --- Init App Data ---
+    fetchStatus();
+    fetchMessages();
+    setInterval(fetchMessages, 5000);
+});

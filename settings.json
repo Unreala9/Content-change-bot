@@ -1,13 +1,15 @@
 {
-  "webhook_url": "https://n8n.getaipilot.in/webhook/telegram_sync",
-  "source_channel_id": "-1004451682253",
-  "destination_channel_id": "-1004318725539",
+  "webhook_url": "https://n8n.getaipilot.in/webhttp://localhost:5678/webhook/testhook/telegram_sync",
+  "source_chat_id": "2093321330",
+  "destination_chat_id": "-1004451682253",
   "auto_post_telegram": true,
-  "text_prefix": "",
-  "text_suffix": "",
-  "find_text": "Bhim, https://bitli.in/GrE8Hm",
-  "replace_text": "Chotu,https://getaipilot.com",
+  "text_prefix": "[MIRROR] ",
+  "text_suffix": " #Sync",
+  "find_text": "crypto, urgent",
+  "replace_text": "web3, now",
   "keyword_filter": "",
   "filter_mode": "all",
-  "enabled": true
+  "enabled": true,
+  "source_channel_id": "-1004451682253",
+  "destination_channel_id": "-1004318725539"
 }

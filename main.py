@@ -1,9 +1,10 @@
 import os
 import sys
+import re
 import asyncio
 from collections import deque
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -32,7 +33,6 @@ recent_messages = deque(maxlen=100)
 stats_counter = {
     "received": 0,
     "forwarded": 0,
-    "auto_posted": 0,
     "filtered": 0,
     "errors": 0
 }
@@ -49,10 +49,15 @@ class UpdateSettingsRequest(BaseModel):
     source_channel_id: Optional[str] = None
     destination_channel_id: Optional[str] = None
     auto_post_telegram: Optional[bool] = None
+    auto_post_n8n: Optional[bool] = None
     text_prefix: Optional[str] = None
     text_suffix: Optional[str] = None
     find_text: Optional[str] = None
     replace_text: Optional[str] = None
+    replacement_rules: Optional[List[Dict[str, Any]]] = None
+    override_all_links: Optional[bool] = None
+    custom_link_url: Optional[str] = None
+    remove_all_links: Optional[bool] = None
     keyword_filter: Optional[str] = None
     filter_mode: Optional[str] = None
     enabled: Optional[bool] = None
@@ -74,12 +79,20 @@ class TestTransformRequest(BaseModel):
     text_suffix: Optional[str] = ""
     find_text: Optional[str] = ""
     replace_text: Optional[str] = ""
+    replacement_rules: Optional[List[Dict[str, Any]]] = []
+    override_all_links: Optional[bool] = False
+    custom_link_url: Optional[str] = ""
+    remove_all_links: Optional[bool] = False
     keyword_filter: Optional[str] = ""
     filter_mode: Optional[str] = "all"
 
 
-# --- Text Transformation Engine ---
+# --- Text Transformation & Filtering Engine ---
 def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str]:
+    """
+    Applies find/replace (multi-rule & comma-separated), link modifications, prefix/suffix, and keyword filter.
+    Returns: (transformed_text, should_forward, filter_reason)
+    """
     if not text:
         text = ""
 
@@ -95,13 +108,40 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
 
     transformed = text
 
-    # Find & Replace
+    # 1. Multiple Structured Replacement Rules (List of {"find": "...", "replace": "..."})
+    rules = settings.get("replacement_rules", [])
+    if isinstance(rules, list):
+        for rule in rules:
+            if isinstance(rule, dict):
+                find_val = rule.get("find", "")
+                replace_val = rule.get("replace", "")
+                if find_val:
+                    transformed = transformed.replace(find_val, replace_val)
+
+    # 2. Comma-separated find_text & replace_text (Bulk multi-word mapping support)
     find_text = settings.get("find_text", "")
     replace_text = settings.get("replace_text", "")
     if find_text:
-        transformed = transformed.replace(find_text, replace_text)
+        find_list = [f.strip() for f in find_text.split(",") if f.strip()]
+        replace_list = [r.strip() for r in replace_text.split(",")]
+        for i, f_word in enumerate(find_list):
+            r_word = replace_list[i] if i < len(replace_list) else (replace_list[-1] if replace_list else "")
+            if f_word:
+                transformed = transformed.replace(f_word, r_word)
 
-    # Prefix & Suffix
+    # 3. Smart Link Modifier Engine (Universal URL Override / Link Removal)
+    remove_all_links = settings.get("remove_all_links", False)
+    override_all_links = settings.get("override_all_links", False)
+    custom_link_url = settings.get("custom_link_url", "").strip()
+
+    url_pattern = r'https?://[^\s<>"\'\)]+'
+
+    if remove_all_links:
+        transformed = re.sub(url_pattern, '', transformed)
+    elif override_all_links and custom_link_url:
+        transformed = re.sub(url_pattern, custom_link_url, transformed)
+
+    # 4. Prefix & Suffix
     prefix = settings.get("text_prefix", "")
     suffix = settings.get("text_suffix", "")
 
@@ -127,13 +167,10 @@ async def incoming_message_handler(event):
         chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", "Unknown")
         raw_text = event.raw_text or ""
 
-        # Source Channel Filtering Check
-        source_filter = str(settings.get("source_channel_id", "all")).strip()
-        if source_filter and source_filter != "all":
-            event_chat_id_str = str(event.chat_id)
-            if source_filter != event_chat_id_str and source_filter.lower() != str(chat_name).lower():
-                # Message does not belong to the selected source channel
-                return
+        # Filter by Source Channel if configured
+        configured_source = str(settings.get("source_channel_id", "all")).strip()
+        if configured_source and configured_source != "all" and str(event.chat_id) != configured_source:
+            return
 
         # Transform message
         transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
@@ -149,8 +186,7 @@ async def incoming_message_handler(event):
             "status": "pending",
             "reason": reason,
             "webhook_url": settings.get("webhook_url", ""),
-            "destination_chat_id": settings.get("destination_channel_id", ""),
-            "auto_posted": False
+            "telegram_posted": False
         }
 
         if not should_forward:
@@ -160,44 +196,48 @@ async def incoming_message_handler(event):
             print(f"⏩ [Filtered] Chat: {chat_name} | Reason: {reason}")
             return
 
-        payload = {
-            "chat_id": event.chat_id,
-            "chat_name": chat_name,
-            "message_id": event.id,
-            "message": transformed_text,
-            "raw_message": raw_text,
-            "date": str(event.date),
-            "sender_id": event.sender_id,
-        }
-
-        # 1. Send to n8n Webhook
-        webhook_url = settings.get("webhook_url", "")
-        if webhook_url:
-            loop = asyncio.get_event_loop()
-            def post_webhook():
-                return requests.post(webhook_url, json=payload, timeout=10)
-            response = await loop.run_in_executor(None, post_webhook)
-            log_item["status"] = f"sent (n8n HTTP {response.status_code})"
-            log_item["status_code"] = response.status_code
-            stats_counter["forwarded"] += 1
-            print(f"✅ Sent to n8n ({chat_name}) | Status: {response.status_code}")
-
-        # 2. Auto-Post Transformed Message to Destination Telegram Channel (if enabled)
+        # 1. Direct Telegram Auto-Posting to Destination Channel
+        auto_post_telegram = settings.get("auto_post_telegram", False)
         dest_channel_id = str(settings.get("destination_channel_id", "")).strip()
-        auto_post_enabled = settings.get("auto_post_telegram", False)
 
-        if auto_post_enabled and dest_channel_id:
+        if auto_post_telegram and dest_channel_id:
             try:
                 target_dest = int(dest_channel_id) if (dest_channel_id.isdigit() or dest_channel_id.startswith("-")) else dest_channel_id
                 dest_entity = await client.get_entity(target_dest)
                 await client.send_message(entity=dest_entity, message=transformed_text)
-                log_item["auto_posted"] = True
-                log_item["auto_post_status"] = f"Posted to {dest_channel_id}"
-                stats_counter["auto_posted"] += 1
-                print(f"🚀 Auto-posted transformed message to Telegram: {dest_channel_id}")
-            except Exception as post_err:
-                print(f"❌ Error auto-posting to Telegram channel: {post_err}")
-                log_item["auto_post_status"] = f"Failed: {post_err}"
+                log_item["telegram_posted"] = True
+                print(f"✈️ Auto-posted modified message directly to Telegram ({dest_channel_id})!")
+            except Exception as tg_err:
+                print(f"⚠️ Telegram auto-post error: {tg_err}")
+                log_item["telegram_error"] = str(tg_err)
+
+        # 2. n8n Webhook Forwarding
+        auto_post_n8n = settings.get("auto_post_n8n", True)
+        webhook_url = settings.get("webhook_url", "")
+
+        if auto_post_n8n and webhook_url:
+            payload = {
+                "chat_id": event.chat_id,
+                "chat_name": chat_name,
+                "message_id": event.id,
+                "message": transformed_text,
+                "raw_message": raw_text,
+                "date": str(event.date),
+                "sender_id": event.sender_id,
+            }
+            loop = asyncio.get_event_loop()
+
+            def post_webhook():
+                return requests.post(webhook_url, json=payload, timeout=10)
+
+            response = await loop.run_in_executor(None, post_webhook)
+            log_item["status"] = f"sent (HTTP {response.status_code})"
+            log_item["status_code"] = response.status_code
+            print(f"✅ Sent to n8n ({chat_name}) | Status: {response.status_code}")
+        else:
+            log_item["status"] = "synced to Telegram"
+
+        stats_counter["forwarded"] += 1
 
     except Exception as e:
         stats_counter["errors"] += 1
@@ -225,8 +265,9 @@ async def lifespan(app: FastAPI):
 
 
 # --- FastAPI App ---
-app = FastAPI(title="Telegram Sync Side-by-Side Mirror Studio", lifespan=lifespan)
+app = FastAPI(title="Telegram Sync Hub & n8n Control Center", lifespan=lifespan)
 
+# Ensure static folder exists
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -331,36 +372,25 @@ async def get_channels():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/channel-history")
-async def get_channel_history(chat_id: str, limit: int = 30):
+@app.get("/api/history/{chat_id}")
+async def get_chat_history(chat_id: str, limit: int = 30):
     if not client.is_connected():
         raise HTTPException(status_code=503, detail="Telegram client not connected")
-
-    if not chat_id or chat_id == "all":
-        return {"success": True, "chat_id": chat_id, "messages": []}
-
     try:
         target = int(chat_id) if (chat_id.isdigit() or chat_id.startswith("-")) else chat_id
         entity = await client.get_entity(target)
         messages = []
         async for msg in client.iter_messages(entity, limit=limit):
-            if msg.text:
-                sender_name = "Unknown"
-                if msg.sender:
-                    sender_name = getattr(msg.sender, "title", None) or getattr(msg.sender, "first_name", "User")
-                messages.append({
-                    "id": msg.id,
-                    "sender_id": msg.sender_id,
-                    "sender_name": sender_name,
-                    "text": msg.text,
-                    "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
-                    "out": msg.out
-                })
+            messages.append({
+                "id": msg.id,
+                "text": msg.text or "",
+                "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
+                "sender_id": msg.sender_id,
+                "out": msg.out
+            })
         return {"success": True, "chat_id": chat_id, "messages": messages}
     except Exception as e:
-        print(f"Error reading history for {chat_id}: {e}")
-        return {"success": False, "error": str(e), "messages": []}
-
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/send")
@@ -412,18 +442,4 @@ async def get_messages():
 
 if __name__ == "__main__":
     import uvicorn
-    import webbrowser
-
-    print("=" * 70)
-    print(" 🚀 TELEGRAM SYNC & SIDE-BY-SIDE MIRROR STUDIO")
-    print("=" * 70)
-    print(" ✅ All modules integrated: Login + Channel Explorer + Listener + Modifier + Web App")
-    print(" 🌐 Server URL: http://localhost:8000")
-    print("=" * 70 + "\n")
-
-    try:
-        webbrowser.open("http://localhost:8000")
-    except Exception:
-        pass
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
