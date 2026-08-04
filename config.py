@@ -9,13 +9,18 @@ SETTINGS_FILE = "settings.json"
 
 DEFAULT_SETTINGS = {
     "webhook_url": os.getenv("WEBHOOK_URL", "https://n8n.getaipilot.in/webhook/telegram_sync"),
-    "source_channel_id": os.getenv("SOURCE_CHANNEL_ID", "all"),
-    "destination_channel_id": os.getenv("DESTINATION_CHANNEL_ID", ""),
-    "auto_post_telegram": False,
+    "source_channel_id": "all",
+    "destination_channel_id": os.getenv("DESTINATION_CHANNEL", ""),
+    "auto_post_telegram": True,
+    "auto_post_n8n": True,
     "text_prefix": "",
     "text_suffix": "",
     "find_text": "",
     "replace_text": "",
+    "replacement_rules": [],
+    "override_all_links": False,
+    "custom_link_url": "",
+    "remove_all_links": False,
     "keyword_filter": "",
     "filter_mode": "all",  # "all" or "contains"
     "enabled": True
