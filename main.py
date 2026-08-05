@@ -15,7 +15,7 @@ import requests
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 
-from config import API_ID, API_HASH, SESSION_NAME, load_settings, save_settings
+from config import API_ID, API_HASH, SESSION_NAME, load_settings, save_settings, PORT
 
 # Fix Windows terminal UTF-8 encoding
 if sys.platform.startswith("win"):
@@ -61,6 +61,9 @@ class UpdateSettingsRequest(BaseModel):
     keyword_filter: Optional[str] = None
     filter_mode: Optional[str] = None
     enabled: Optional[bool] = None
+    forward_media: Optional[bool] = None
+    replace_media: Optional[bool] = None
+    custom_media_url: Optional[str] = None
 
 
 class SendCodeRequest(BaseModel):
@@ -85,6 +88,9 @@ class TestTransformRequest(BaseModel):
     remove_all_links: Optional[bool] = False
     keyword_filter: Optional[str] = ""
     filter_mode: Optional[str] = "all"
+    forward_media: Optional[bool] = True
+    replace_media: Optional[bool] = False
+    custom_media_url: Optional[str] = ""
 
 
 # --- Text Transformation & Filtering Engine ---
@@ -153,6 +159,28 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
     return transformed, True, "Passed"
 
 
+async def download_message_media(msg, chat_id) -> Optional[str]:
+    """Downloads media from Telegram message if present and returns the web-accessible URL path."""
+    if msg and msg.media:
+        try:
+            # File name pattern: static/media/{chat_id}_{message_id}
+            base_path = os.path.join("static", "media", f"{chat_id}_{msg.id}")
+            # Telethon will append the correct extension automatically
+            saved_path = await client.download_media(msg, file=base_path)
+            if saved_path:
+                # Convert backslashes to forward slashes for URL compatibility
+                web_path = saved_path.replace("\\", "/")
+                # Ensure it starts with /static/ for routing
+                if web_path.startswith("static/"):
+                    web_path = "/" + web_path
+                elif not web_path.startswith("/static/"):
+                    web_path = "/static/" + web_path
+                return web_path
+        except Exception as e:
+            print(f"⚠️ Error downloading media: {e}")
+    return None
+
+
 # --- Telethon NewMessage Listener ---
 @client.on(events.NewMessage)
 async def incoming_message_handler(event):
@@ -172,6 +200,18 @@ async def incoming_message_handler(event):
         if configured_source and configured_source != "all" and str(event.chat_id) != configured_source:
             return
 
+        # Download and process media if present and enabled
+        forward_media = settings.get("forward_media", True)
+        replace_media = settings.get("replace_media", False)
+        custom_media_url = settings.get("custom_media_url", "").strip()
+
+        media_path = None
+        if event.message.media and forward_media:
+            if replace_media and custom_media_url:
+                media_path = custom_media_url
+            else:
+                media_path = await download_message_media(event.message, event.chat_id)
+
         # Transform message
         transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
 
@@ -181,6 +221,7 @@ async def incoming_message_handler(event):
             "chat_name": chat_name,
             "raw_message": raw_text,
             "transformed_message": transformed_text,
+            "media_path": media_path,
             "date": event.date.strftime("%Y-%m-%d %H:%M:%S") if event.date else datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "sender_id": event.sender_id,
             "status": "pending",
@@ -204,7 +245,20 @@ async def incoming_message_handler(event):
             try:
                 target_dest = int(dest_channel_id) if (dest_channel_id.isdigit() or dest_channel_id.startswith("-")) else dest_channel_id
                 dest_entity = await client.get_entity(target_dest)
-                await client.send_message(entity=dest_entity, message=transformed_text)
+                
+                # Check for media path to send alongside the message caption (supports local path or remote URL)
+                local_file_path = None
+                if media_path:
+                    if media_path.startswith("http://") or media_path.startswith("https://"):
+                        local_file_path = media_path
+                    else:
+                        local_file_path = media_path.lstrip('/')
+                
+                await client.send_message(
+                    entity=dest_entity, 
+                    message=transformed_text, 
+                    file=local_file_path
+                )
                 log_item["telegram_posted"] = True
                 print(f"✈️ Auto-posted modified message directly to Telegram ({dest_channel_id})!")
             except Exception as tg_err:
@@ -222,6 +276,8 @@ async def incoming_message_handler(event):
                 "message_id": event.id,
                 "message": transformed_text,
                 "raw_message": raw_text,
+                "media_path": media_path,
+                "media_url": f"http://localhost:{PORT}{media_path}" if media_path else None,
                 "date": str(event.date),
                 "sender_id": event.sender_id,
             }
@@ -267,8 +323,9 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App ---
 app = FastAPI(title="Telegram Sync Hub & n8n Control Center", lifespan=lifespan)
 
-# Ensure static folder exists
+# Ensure static folder and media subfolder exist
 os.makedirs("static", exist_ok=True)
+os.makedirs(os.path.join("static", "media"), exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -381,9 +438,29 @@ async def get_chat_history(chat_id: str, limit: int = 30):
         entity = await client.get_entity(target)
         messages = []
         async for msg in client.iter_messages(entity, limit=limit):
+            media_path = None
+            if msg.media:
+                # Search if file is already downloaded in static/media
+                prefix = f"{chat_id}_{msg.id}"
+                media_dir = os.path.join("static", "media")
+                found_file = None
+                if os.path.exists(media_dir):
+                    try:
+                        for file_name in os.listdir(media_dir):
+                            if file_name.startswith(prefix):
+                                found_file = file_name
+                                break
+                    except Exception:
+                        pass
+                if found_file:
+                    media_path = f"/static/media/{found_file}"
+                else:
+                    media_path = await download_message_media(msg, chat_id)
+
             messages.append({
                 "id": msg.id,
                 "text": msg.text or "",
+                "media_path": media_path,
                 "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
                 "sender_id": msg.sender_id,
                 "out": msg.out
@@ -442,4 +519,4 @@ async def get_messages():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)

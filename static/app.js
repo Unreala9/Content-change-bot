@@ -66,6 +66,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const chkOverrideLinks = document.getElementById("chkOverrideLinks");
     const inputCustomLinkUrl = document.getElementById("inputCustomLinkUrl");
     const chkRemoveLinks = document.getElementById("chkRemoveLinks");
+    
+    // Image & Media Elements
+    const chkForwardMedia = document.getElementById("chkForwardMedia");
+    const chkReplaceMedia = document.getElementById("chkReplaceMedia");
+    const inputCustomMediaUrl = document.getElementById("inputCustomMediaUrl");
 
     // Overview & Channels Tab Elements
     const statReceived = document.getElementById("statReceived");
@@ -420,6 +425,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const channelName = m.sender_name || defaultChannelName;
             const text = m.text || m.raw_message || '';
             const msgId = m.id || (index + 1);
+            
+            const mediaHtml = m.media_path ? `
+                <div class="msg-card-media">
+                    <img src="${m.media_path}" alt="Media Attachment" class="message-image" loading="lazy" />
+                </div>
+            ` : '';
 
             return `
                 <div class="source-message-card">
@@ -427,6 +438,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span class="msg-sender-title"><i class="fa-solid fa-inbox text-blue"></i> ${escapeHtml(channelName)}</span>
                         <span class="msg-timestamp">${m.date || ''}</span>
                     </div>
+                    ${mediaHtml}
                     <div class="msg-card-body">${escapeHtml(text)}</div>
                     <div class="msg-card-footer">
                         <span class="badge badge-id-blue">ID: ${msgId}</span>
@@ -454,18 +466,27 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        destChatFeed.innerHTML = messages.map(m => `
-            <div class="dest-message-card">
-                <div class="msg-card-header">
-                    <span class="msg-sender-title"><i class="fa-solid fa-circle-check text-green"></i> ${escapeHtml(defaultChannelName)}</span>
-                    <span class="msg-timestamp">${m.date || ''}</span>
+        destChatFeed.innerHTML = messages.map(m => {
+            const mediaHtml = m.media_path ? `
+                <div class="msg-card-media">
+                    <img src="${m.media_path}" alt="Media Attachment" class="message-image" loading="lazy" />
                 </div>
-                <div class="msg-card-body">${escapeHtml(m.text || m.raw_message || '')}</div>
-                <div class="msg-card-footer">
-                    <span class="badge badge-success">Posted</span>
+            ` : '';
+
+            return `
+                <div class="dest-message-card">
+                    <div class="msg-card-header">
+                        <span class="msg-sender-title"><i class="fa-solid fa-circle-check text-green"></i> ${escapeHtml(defaultChannelName)}</span>
+                        <span class="msg-timestamp">${m.date || ''}</span>
+                    </div>
+                    ${mediaHtml}
+                    <div class="msg-card-body">${escapeHtml(m.text || m.raw_message || '')}</div>
+                    <div class="msg-card-footer">
+                        <span class="badge badge-success">Posted</span>
+                    </div>
                 </div>
-            </div>
-        `).join("");
+            `;
+        }).join("");
     }
 
     if (btnRefreshSourceChat) btnRefreshSourceChat.addEventListener("click", () => updateStudioPanelCards());
@@ -479,8 +500,6 @@ document.addEventListener("DOMContentLoaded", () => {
         if (inputWebhookUrlAlt) inputWebhookUrlAlt.value = settings.webhook_url || "";
         inputPrefix.value = settings.text_prefix || "";
         inputSuffix.value = settings.text_suffix || "";
-        inputFindText.value = settings.find_text || "";
-        inputReplaceText.value = settings.replace_text || "";
         selectFilterMode.value = settings.filter_mode || "all";
 
         switchAutoTelegram.checked = settings.auto_post_telegram ?? true;
@@ -493,6 +512,10 @@ document.addEventListener("DOMContentLoaded", () => {
         chkOverrideLinks.checked = settings.override_all_links ?? false;
         inputCustomLinkUrl.value = settings.custom_link_url || "";
         chkRemoveLinks.checked = settings.remove_all_links ?? false;
+
+        if (chkForwardMedia) chkForwardMedia.checked = settings.forward_media ?? true;
+        if (chkReplaceMedia) chkReplaceMedia.checked = settings.replace_media ?? false;
+        if (inputCustomMediaUrl) inputCustomMediaUrl.value = settings.custom_media_url || "";
 
         if (overviewWebhookUrl) {
             overviewWebhookUrl.textContent = settings.webhook_url || "Not Configured";
@@ -520,7 +543,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 custom_link_url: inputCustomLinkUrl.value,
                 remove_all_links: chkRemoveLinks.checked,
                 keyword_filter: studioKeyword.value,
-                filter_mode: selectFilterMode.value
+                filter_mode: selectFilterMode.value,
+                forward_media: chkForwardMedia.checked,
+                replace_media: chkReplaceMedia.checked,
+                custom_media_url: inputCustomMediaUrl.value
             };
 
             try {
@@ -540,6 +566,40 @@ document.addEventListener("DOMContentLoaded", () => {
             } finally {
                 btnSaveStudioRules.disabled = false;
                 btnSaveStudioRules.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Rules';
+            }
+        });
+    }
+
+    // Save Settings Form
+    if (settingsForm) {
+        settingsForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            btnSaveSettings.disabled = true;
+            btnSaveSettings.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+            const payload = {
+                webhook_url: inputWebhookUrlAlt.value,
+                text_prefix: inputPrefix.value,
+                text_suffix: inputSuffix.value,
+            };
+
+            try {
+                const res = await fetch("/api/config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    state.settings = data.settings;
+                    populateSettingsUI(data.settings);
+                    alert("✅ Settings Saved Successfully!");
+                }
+            } catch (err) {
+                alert("❌ Error saving settings: " + err);
+            } finally {
+                btnSaveSettings.disabled = false;
+                btnSaveSettings.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
             }
         });
     }

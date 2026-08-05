@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=1.0.1">
 </head>
 <body>
     <div class="app-container">
@@ -207,6 +207,26 @@
                                             <input type="checkbox" id="chkRemoveLinks">
                                             <span>Remove All Links from Messages (Clean Mode)</span>
                                         </label>
+                                    </div>
+                                </div>
+
+                                <!-- Image & Media Settings Card -->
+                                <div class="link-modifier-card" style="margin-top: 10px;">
+                                    <div class="card-title"><i class="fa-solid fa-image text-green"></i> Image & Media Settings</div>
+                                    <div class="form-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="chkForwardMedia" checked>
+                                            <span><strong>Forward Image / Media Attachments</strong></span>
+                                        </label>
+                                        <small class="form-text text-muted">If unchecked, the bot will drop the image and only forward the text caption.</small>
+                                    </div>
+                                    <div class="form-group mb-0">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="chkReplaceMedia">
+                                            <span>Replace Image with Custom Image</span>
+                                        </label>
+                                        <input type="text" id="inputCustomMediaUrl" class="form-control" placeholder="https://example.com/custom_image.jpg" style="margin-top: 6px;">
+                                        <small class="form-text text-muted">A URL or local path to a custom image file to replace the original image.</small>
                                     </div>
                                 </div>
 
@@ -509,6 +529,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=1.0.1"></script>
 </body>
 </html>
