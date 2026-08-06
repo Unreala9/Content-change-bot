@@ -3,6 +3,3 @@ uvicorn[standard]
 telethon
 pydantic
 python-dotenv
-supabase
-pyjwt
-requests

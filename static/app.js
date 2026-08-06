@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Telegram Sync & Side-by-Side Studio - Multi-User JavaScript App
+   Telegram Sync & Side-by-Side Studio - JavaScript Application Logic
    ========================================================================== */
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -15,29 +15,8 @@ document.addEventListener("DOMContentLoaded", () => {
         messages: [],
         sourceHistory: [],
         destHistory: [],
-        replacementRules: [], // Array of {find: "", replace: ""}
-        supabaseConfigured: false,
-        currentAuthTab: "login" // "login" or "register"
+        replacementRules: [] // Array of {find: "", replace: ""}
     };
-
-    // --- API Fetch Wrapper with Bearer Token ---
-    async function apiFetch(url, options = {}) {
-        const token = localStorage.getItem("sb_access_token");
-        const headers = options.headers || {};
-
-        if (token) {
-            headers["Authorization"] = `Bearer ${token}`;
-        }
-        options.headers = headers;
-
-        const res = await fetch(url, options);
-        if (res.status === 401 && state.supabaseConfigured) {
-            // Redirect to dedicated login page
-            localStorage.removeItem("sb_access_token");
-            window.location.href = "/login";
-        }
-        return res;
-    }
 
     // --- DOM Elements Cache ---
     const navButtons = document.querySelectorAll(".nav-btn");
@@ -51,20 +30,38 @@ document.addEventListener("DOMContentLoaded", () => {
     const sidebarStatusUser = document.getElementById("sidebarStatusUser");
     const headerConnectionBadge = document.getElementById("headerConnectionBadge");
     const btnRefreshStatus = document.getElementById("btnRefreshStatus");
-
-    // Supabase Auth & Header Elements
-    const supabaseAuthModal = document.getElementById("supabaseAuthModal");
-    const tabAuthLogin = document.getElementById("tabAuthLogin");
-    const tabAuthRegister = document.getElementById("tabAuthRegister");
-    const formSupabaseAuth = document.getElementById("formSupabaseAuth");
-    const authEmail = document.getElementById("authEmail");
-    const authPassword = document.getElementById("authPassword");
-    const btnSubmitAuth = document.getElementById("btnSubmitAuth");
-    const authAlert = document.getElementById("authAlert");
     const headerUserEmail = document.getElementById("headerUserEmail");
-    const btnLogoutSupabase = document.getElementById("btnLogoutSupabase");
-    const btnConnectTelegram = document.getElementById("btnConnectTelegram");
-    const btnConnectTelegramText = document.getElementById("btnConnectTelegramText");
+    const btnLogout = document.getElementById("btnLogout");
+    const btnConnectTelegramHeader = document.getElementById("btnConnectTelegramHeader");
+    const btnConnectTelegramBanner = document.getElementById("btnConnectTelegramBanner");
+    const telegramAuthBanner = document.getElementById("telegramAuthBanner");
+    const btnDisconnectTelegram = document.getElementById("btnDisconnectTelegram");
+
+
+
+    // --- Authenticated Fetch Helper ---
+    async function authFetch(url, options = {}) {
+        const token = localStorage.getItem("sb_access_token");
+        options.headers = options.headers || {};
+        if (token) {
+            options.headers["Authorization"] = `Bearer ${token}`;
+        }
+        const res = await fetch(url, options);
+        if (res.status === 401 && !url.includes("/api/status")) {
+            console.warn("Unauthorized request, redirecting to login page...");
+            localStorage.removeItem("sb_access_token");
+            window.location.href = "/login";
+        }
+        return res;
+    }
+
+    if (btnLogout) {
+        btnLogout.addEventListener("click", () => {
+            localStorage.removeItem("sb_access_token");
+            window.location.href = "/login";
+        });
+    }
+
 
     // Studio Top Control Bar
     const selectSourceChannel = document.getElementById("selectSourceChannel");
@@ -101,11 +98,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const chkOverrideLinks = document.getElementById("chkOverrideLinks");
     const inputCustomLinkUrl = document.getElementById("inputCustomLinkUrl");
     const chkRemoveLinks = document.getElementById("chkRemoveLinks");
-    
-    // Image & Media Elements
-    const chkForwardMedia = document.getElementById("chkForwardMedia");
-    const chkReplaceMedia = document.getElementById("chkReplaceMedia");
-    const inputCustomMediaUrl = document.getElementById("inputCustomMediaUrl");
 
     // Overview & Channels Tab Elements
     const statReceived = document.getElementById("statReceived");
@@ -158,7 +150,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const sendDestinationChat = document.getElementById("sendDestinationChat");
     const sendDestinationId = document.getElementById("sendDestinationId");
     const sendMessageText = document.getElementById("sendMessageText");
-    const btnSubmitSend = document.getElementById("btnSubmitSend");
 
     // Sample text for live modifier tester
     let activeSampleMessageText = "Bhim 2 hour Loot\n\nSend ₹20 or more and get upto ₹20 Cashback\n\nDate: 20th December, 2025\nTime: 3:00 PM to 5:00 PM\n\nDownload Now: https://bitli.in/GrE8HmE\n\nValid Once Per User";
@@ -200,129 +191,6 @@ document.addEventListener("DOMContentLoaded", () => {
         btnGoToSettings.addEventListener("click", () => {
             const n8nNavBtn = document.querySelector('[data-tab="tab-n8n"]');
             if (n8nNavBtn) n8nNavBtn.click();
-        });
-    }
-
-    // --- Supabase Authentication UI Handlers ---
-    function showSupabaseAuthModal(msg = "") {
-        if (!supabaseAuthModal) return;
-        supabaseAuthModal.classList.add("active");
-        if (msg && authAlert) {
-            authAlert.className = "alert alert-danger";
-            authAlert.textContent = msg;
-            authAlert.classList.remove("hidden");
-        } else if (authAlert) {
-            authAlert.classList.add("hidden");
-        }
-    }
-
-    function hideSupabaseAuthModal() {
-        if (supabaseAuthModal) supabaseAuthModal.classList.remove("active");
-    }
-
-    if (tabAuthLogin && tabAuthRegister) {
-        tabAuthLogin.addEventListener("click", () => {
-            state.currentAuthTab = "login";
-            tabAuthLogin.classList.add("active");
-            tabAuthLogin.style.background = "";
-            tabAuthLogin.style.color = "";
-            tabAuthRegister.classList.remove("active");
-            tabAuthRegister.style.background = "transparent";
-            tabAuthRegister.style.color = "var(--muted-color, #707a8a)";
-            btnSubmitAuth.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> Sign In to Platform';
-        });
-
-        tabAuthRegister.addEventListener("click", () => {
-            state.currentAuthTab = "register";
-            tabAuthRegister.classList.add("active");
-            tabAuthRegister.style.background = "";
-            tabAuthRegister.style.color = "";
-            tabAuthLogin.classList.remove("active");
-            tabAuthLogin.style.background = "transparent";
-            tabAuthLogin.style.color = "var(--muted-color, #707a8a)";
-            btnSubmitAuth.innerHTML = '<i class="fa-solid fa-user-plus"></i> Create Account';
-        });
-    }
-
-    if (formSupabaseAuth) {
-        formSupabaseAuth.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const email = authEmail.value.trim();
-            const password = authPassword.value.trim();
-            if (!email || !password) return;
-
-            btnSubmitAuth.disabled = true;
-            btnSubmitAuth.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
-            if (authAlert) authAlert.classList.add("hidden");
-
-            const endpoint = state.currentAuthTab === "login" ? "/api/user/login" : "/api/user/signup";
-
-            try {
-                const res = await fetch(endpoint, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email, password })
-                });
-                const data = await res.json();
-
-                if (res.ok && data.success) {
-                    if (data.access_token) {
-                        localStorage.setItem("sb_access_token", data.access_token);
-                    }
-                    if (authAlert) {
-                        authAlert.className = "alert alert-success";
-                        authAlert.textContent = data.message || "Authentication successful!";
-                        authAlert.classList.remove("hidden");
-                    }
-                    setTimeout(() => {
-                        hideSupabaseAuthModal();
-                        fetchStatus();
-                    }, 800);
-                } else {
-                    if (authAlert) {
-                        authAlert.className = "alert alert-danger";
-                        authAlert.textContent = data.detail || "Authentication failed.";
-                        authAlert.classList.remove("hidden");
-                    }
-                }
-            } catch (err) {
-                if (authAlert) {
-                    authAlert.className = "alert alert-danger";
-                    authAlert.textContent = "Error connecting to server: " + err;
-                    authAlert.classList.remove("hidden");
-                }
-            } finally {
-                btnSubmitAuth.disabled = false;
-                btnSubmitAuth.innerHTML = state.currentAuthTab === "login"
-                    ? '<i class="fa-solid fa-right-to-bracket"></i> Sign In to Platform'
-                    : '<i class="fa-solid fa-user-plus"></i> Create Account';
-            }
-        });
-    }
-
-    if (btnLogoutSupabase) {
-        btnLogoutSupabase.addEventListener("click", () => {
-            localStorage.removeItem("sb_access_token");
-            window.location.href = "/login";
-        });
-    }
-
-    if (btnConnectTelegram) {
-        btnConnectTelegram.addEventListener("click", async () => {
-            if (state.authorized) {
-                if (confirm("Are you sure you want to disconnect your Telegram account from this profile?")) {
-                    try {
-                        const res = await apiFetch("/api/auth/disconnect", { method: "POST" });
-                        const data = await res.json();
-                        alert(data.message || "Telegram account disconnected.");
-                        fetchStatus();
-                    } catch (err) {
-                        alert("Error disconnecting Telegram: " + err);
-                    }
-                }
-            } else {
-                if (loginModal) loginModal.classList.add("active");
-            }
         });
     }
 
@@ -383,100 +251,105 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- API Service Calls ---
     async function fetchStatus() {
         try {
-            const res = await apiFetch("/api/status");
-            if (res.status === 401) return;
-
+            const res = await authFetch("/api/status");
             const data = await res.json();
             
             state.connected = data.connected;
             state.authorized = data.authorized;
             state.user = data.user;
             state.settings = data.settings || {};
-            state.replacementRules = data.settings.replacement_rules || [];
-            state.supabaseConfigured = data.supabase_configured;
+            state.replacementRules = (data.settings && data.settings.replacement_rules) ? data.settings.replacement_rules : [];
 
-            if (data.supabase_configured && !localStorage.getItem("sb_access_token")) {
-                window.location.href = "/login";
-                return;
+            if (headerUserEmail && data.account) {
+                headerUserEmail.textContent = data.account.email || "";
             }
 
             updateStatusUI(data);
-            populateSettingsUI(data.settings);
-            renderRuleRows();
-            updateStudioSandbox();
+
+            try { populateSettingsUI(data.settings); } catch (e) { console.warn("populateSettingsUI notice:", e); }
+            try { renderRuleRows(); } catch (e) { console.warn("renderRuleRows notice:", e); }
+            try { updateStudioSandbox(); } catch (e) { console.warn("updateStudioSandbox notice:", e); }
             
-            if (state.authorized && state.channels.length === 0) {
+            if (state.channels.length === 0) {
                 fetchChannels();
             }
         } catch (err) {
-            console.error("Error fetching status:", err);
-            sidebarStatusTitle.textContent = "Offline";
-            sidebarStatusDot.className = "status-indicator-dot offline";
-            headerConnectionBadge.className = "pill-badge status-disconnected";
-            headerConnectionBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Offline';
+            console.error("Error fetching status from API:", err);
+            if (sidebarStatusTitle) sidebarStatusTitle.textContent = "Offline";
+            if (sidebarStatusDot) sidebarStatusDot.className = "status-indicator-dot offline";
+            if (headerConnectionBadge) {
+                headerConnectionBadge.className = "pill-badge status-disconnected";
+                headerConnectionBadge.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Offline';
+            }
         }
     }
 
+
     function updateStatusUI(data) {
-        if (headerUserEmail) {
-            headerUserEmail.textContent = data.current_user_email || "Local User";
-        }
+        if (data.connected && data.authorized) {
+            if (sidebarStatusTitle) sidebarStatusTitle.textContent = "Telegram Connected";
+            if (sidebarStatusUser) sidebarStatusUser.textContent = data.user ? `@${data.user.username || data.user.first_name}` : "Authenticated";
+            if (sidebarStatusDot) sidebarStatusDot.className = "status-indicator-dot online";
 
-        if (btnLogoutSupabase) {
-            btnLogoutSupabase.style.display = data.supabase_configured ? "inline-block" : "none";
-        }
+            if (headerConnectionBadge) {
+                headerConnectionBadge.className = "pill-badge status-connected";
+                headerConnectionBadge.innerHTML = '<i class="fa-solid fa-wifi"></i> Connected';
+            }
 
-        if (btnConnectTelegramText) {
-            btnConnectTelegramText.textContent = data.authorized ? "Connected" : "Connect Telegram";
-        }
-        if (btnConnectTelegram) {
-            btnConnectTelegram.className = data.authorized ? "btn btn-success btn-sm" : "btn btn-warning btn-sm";
-        }
+            if (accountBadge) {
+                accountBadge.className = "badge badge-success";
+                accountBadge.textContent = "Signed In";
+            }
 
-        if (data.authorized) {
-            sidebarStatusTitle.textContent = "Telegram Connected";
-            sidebarStatusUser.textContent = data.user ? `@${data.user.username || data.user.first_name}` : "Authenticated";
-            sidebarStatusDot.className = "status-indicator-dot online";
-
-            headerConnectionBadge.className = "pill-badge status-connected";
-            headerConnectionBadge.innerHTML = '<i class="fa-solid fa-wifi"></i> Connected';
-
-            accountBadge.className = "badge badge-success";
-            accountBadge.textContent = "Signed In";
+            if (btnConnectTelegramHeader) btnConnectTelegramHeader.style.display = "none";
+            if (telegramAuthBanner) telegramAuthBanner.style.display = "none";
+            if (btnDisconnectTelegram) btnDisconnectTelegram.style.display = "inline-flex";
+            if (btnOpenLoginModal) btnOpenLoginModal.style.display = "none";
 
             if (data.user) {
-                userName.textContent = `${data.user.first_name} ${data.user.last_name || ''}`.trim();
-                userUsername.textContent = data.user.username ? `@${data.user.username}` : "No username";
-                userPhone.textContent = `Phone: +${data.user.phone}`;
-                userAvatar.textContent = (data.user.first_name || "T")[0].toUpperCase();
+                if (userName) userName.textContent = `${data.user.first_name || ''} ${data.user.last_name || ''}`.trim() || "Connected User";
+                if (userUsername) userUsername.textContent = data.user.username ? `@${data.user.username}` : "No username";
+                if (userPhone) userPhone.textContent = data.user.phone ? `Phone: +${data.user.phone}` : "--";
+                if (userAvatar) userAvatar.textContent = (data.user.first_name || "T")[0].toUpperCase();
             }
         } else {
-            sidebarStatusTitle.textContent = "Disconnected / Not Signed In";
-            sidebarStatusUser.textContent = "Telegram Connection Required";
-            sidebarStatusDot.className = "status-indicator-dot offline";
+            if (sidebarStatusTitle) sidebarStatusTitle.textContent = "Disconnected / Not Signed In";
+            if (sidebarStatusUser) sidebarStatusUser.textContent = "Action required";
+            if (sidebarStatusDot) sidebarStatusDot.className = "status-indicator-dot offline";
 
-            headerConnectionBadge.className = "pill-badge status-disconnected";
-            headerConnectionBadge.innerHTML = '<i class="fa-solid fa-plug"></i> Not Authenticated';
+            if (headerConnectionBadge) {
+                headerConnectionBadge.className = "pill-badge status-disconnected";
+                headerConnectionBadge.innerHTML = '<i class="fa-solid fa-plug"></i> Offline / Connect Telegram';
+            }
 
-            accountBadge.className = "badge badge-danger";
-            accountBadge.textContent = "Signed Out";
-            userName.textContent = "Not Connected";
-            userUsername.textContent = "Click 'Connect Telegram' to link account";
-            userPhone.textContent = "--";
-            userAvatar.textContent = "?";
+            if (btnConnectTelegramHeader) btnConnectTelegramHeader.style.display = "inline-flex";
+            if (telegramAuthBanner) telegramAuthBanner.style.display = "flex";
+            if (btnDisconnectTelegram) btnDisconnectTelegram.style.display = "none";
+            if (btnOpenLoginModal) btnOpenLoginModal.style.display = "inline-flex";
+
+
+            if (accountBadge) {
+                accountBadge.className = "badge badge-danger";
+                accountBadge.textContent = "Signed Out";
+            }
+            if (userName) userName.textContent = "Not Signed In";
+            if (userUsername) userUsername.textContent = "Click button below to connect Telegram";
+            if (userPhone) userPhone.textContent = "--";
+            if (userAvatar) userAvatar.textContent = "?";
         }
 
         if (data.stats) {
-            statReceived.textContent = data.stats.received || 0;
-            statForwarded.textContent = data.stats.forwarded || 0;
-            statFiltered.textContent = data.stats.filtered || 0;
+            if (statReceived) statReceived.textContent = data.stats.received || 0;
+            if (statForwarded) statForwarded.textContent = data.stats.forwarded || 0;
+            if (statFiltered) statFiltered.textContent = data.stats.filtered || 0;
         }
     }
+
 
     // --- Channels System ---
     async function fetchChannels() {
         try {
-            const res = await apiFetch("/api/channels");
+            const res = await authFetch("/api/channels");
             const data = await res.json();
             if (data.success) {
                 state.channels = data.channels || [];
@@ -568,7 +441,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         sourceChatFeed.innerHTML = '<div class="loading-spinner-container"><i class="fa-solid fa-spinner fa-spin"></i> Loading source messages...</div>';
         try {
-            const res = await apiFetch(`/api/history/${chatId}`);
+            const res = await authFetch(`/api/history/${chatId}`);
             const data = await res.json();
             if (data.success) {
                 state.sourceHistory = data.messages || [];
@@ -585,7 +458,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         destChatFeed.innerHTML = '<div class="loading-spinner-container"><i class="fa-solid fa-spinner fa-spin"></i> Loading destination messages...</div>';
         try {
-            const res = await apiFetch(`/api/history/${chatId}`);
+            const res = await authFetch(`/api/history/${chatId}`);
             const data = await res.json();
             if (data.success) {
                 state.destHistory = data.messages || [];
@@ -607,12 +480,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const channelName = m.sender_name || defaultChannelName;
             const text = m.text || m.raw_message || '';
             const msgId = m.id || (index + 1);
-            
-            const mediaHtml = m.media_path ? `
-                <div class="msg-card-media">
-                    <img src="${m.media_path}" alt="Media Attachment" class="message-image" loading="lazy" />
-                </div>
-            ` : '';
 
             return `
                 <div class="source-message-card">
@@ -620,12 +487,11 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span class="msg-sender-title"><i class="fa-solid fa-inbox text-blue"></i> ${escapeHtml(channelName)}</span>
                         <span class="msg-timestamp">${m.date || ''}</span>
                     </div>
-                    ${mediaHtml}
                     <div class="msg-card-body">${escapeHtml(text)}</div>
                     <div class="msg-card-footer">
                         <span class="badge badge-id-blue">ID: ${msgId}</span>
                         <button class="btn-load-modifier" data-text="${escapeAttribute(text)}">
-                            <i class="fa-solid fa-code-branch"></i> Load into Modifier
+                            <i class="fa-solid fa-code-branch"></i> % Load into Modifier
                         </button>
                     </div>
                 </div>
@@ -642,86 +508,54 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    function renderDestChatFeed(messages, defaultChannelName = 'Destination') {
+    function renderDestChatFeed(messages, defaultChannelName = 'Target') {
         if (!messages || messages.length === 0) {
-            destChatFeed.innerHTML = '<div class="text-muted text-center" style="padding: 20px;">No messages sent to destination channel yet.</div>';
+            destChatFeed.innerHTML = '<div class="text-muted text-center" style="padding: 20px;">No messages posted to destination yet.</div>';
             return;
         }
 
-        destChatFeed.innerHTML = messages.map((m, index) => {
-            const text = m.text || m.transformed_message || '';
-            const msgId = m.id || (index + 1);
-
-            return `
-                <div class="dest-message-card">
-                    <div class="msg-card-header">
-                        <span class="msg-sender-title text-green"><i class="fa-solid fa-paper-plane"></i> ${escapeHtml(defaultChannelName)}</span>
-                        <span class="msg-timestamp">${m.date || ''}</span>
-                    </div>
-                    <div class="msg-card-body">${escapeHtml(text)}</div>
-                    <div class="msg-card-footer">
-                        <span class="badge badge-id-green">ID: ${msgId}</span>
-                        <span class="status-tag status-success"><i class="fa-solid fa-check-double"></i> Synced</span>
-                    </div>
+        destChatFeed.innerHTML = messages.map(m => `
+            <div class="dest-message-card">
+                <div class="msg-card-header">
+                    <span class="msg-sender-title"><i class="fa-solid fa-circle-check text-green"></i> ${escapeHtml(defaultChannelName)}</span>
+                    <span class="msg-timestamp">${m.date || ''}</span>
                 </div>
-            `;
-        }).join("");
-    }
-
-    if (btnRefreshSourceChat) {
-        btnRefreshSourceChat.addEventListener("click", () => fetchSourceHistory(selectSourceChannel.value));
-    }
-    if (btnRefreshDestChat) {
-        btnRefreshDestChat.addEventListener("click", () => fetchDestHistory(selectDestChannel.value));
-    }
-
-    // --- Channels Explorer UI ---
-    function renderChannelsGrid() {
-        if (!channelsGrid) return;
-
-        let filtered = state.channels.filter(ch => {
-            const matchesQuery = ch.name.toLowerCase().includes(state.searchQuery.toLowerCase()) || ch.id.includes(state.searchQuery);
-            if (state.activeChannelFilter === "all") return matchesQuery;
-            if (state.activeChannelFilter === "channels") return matchesQuery && ch.is_channel;
-            if (state.activeChannelFilter === "groups") return matchesQuery && ch.is_group;
-            if (state.activeChannelFilter === "users") return matchesQuery && ch.is_user;
-            return matchesQuery;
-        });
-
-        if (filtered.length === 0) {
-            channelsGrid.innerHTML = '<div class="no-channels-card"><i class="fa-solid fa-folder-open"></i><p>No matching channels or chats found.</p></div>';
-            return;
-        }
-
-        channelsGrid.innerHTML = filtered.map(ch => `
-            <div class="channel-card">
-                <div class="channel-card-header">
-                    <div class="channel-icon">${ch.is_channel ? '<i class="fa-solid fa-bullhorn text-blue"></i>' : (ch.is_group ? '<i class="fa-solid fa-users text-purple"></i>' : '<i class="fa-solid fa-user text-green"></i>')}</div>
-                    <div class="channel-info">
-                        <h4>${escapeHtml(ch.name)}</h4>
-                        <span class="channel-type-badge">${ch.type}</span>
-                    </div>
-                </div>
-                <div class="channel-card-body">
-                    <p><strong>Chat ID:</strong> <code>${ch.id}</code></p>
-                    <p><strong>Unread:</strong> ${ch.unread_count}</p>
-                </div>
-                <div class="channel-card-actions">
-                    <button class="btn btn-outline btn-xs btn-set-source" data-id="${ch.id}">Set as Source</button>
-                    <button class="btn btn-primary btn-xs btn-set-dest" data-id="${ch.id}">Set as Dest</button>
-                    <button class="btn btn-success btn-xs btn-open-send" data-id="${ch.id}" data-name="${escapeAttribute(ch.name)}"><i class="fa-solid fa-paper-plane"></i> Send</button>
+                <div class="msg-card-body">${escapeHtml(m.text || m.raw_message || '')}</div>
+                <div class="msg-card-footer">
+                    <span class="badge badge-success">Posted</span>
                 </div>
             </div>
         `).join("");
+    }
 
-        if (chkForwardMedia) chkForwardMedia.checked = settings.forward_media ?? true;
-        if (chkReplaceMedia) chkReplaceMedia.checked = settings.replace_media ?? false;
-        if (inputCustomMediaUrl) inputCustomMediaUrl.value = settings.custom_media_url || "";
+    if (btnRefreshSourceChat) btnRefreshSourceChat.addEventListener("click", () => updateStudioPanelCards());
+    if (btnRefreshDestChat) btnRefreshDestChat.addEventListener("click", () => updateStudioPanelCards());
 
-        if (overviewWebhookUrl) {
+    // --- Settings & Text Rules Engine ---
+    function populateSettingsUI(settings) {
+        if (!settings) return;
+
+        if (typeof inputWebhookUrl !== "undefined" && inputWebhookUrl) inputWebhookUrl.value = settings.webhook_url || "";
+        if (typeof inputWebhookUrlAlt !== "undefined" && inputWebhookUrlAlt) inputWebhookUrlAlt.value = settings.webhook_url || "";
+
+        if (typeof switchAutoTelegram !== "undefined" && switchAutoTelegram) switchAutoTelegram.checked = settings.auto_post_telegram ?? true;
+        if (typeof selectFilterMode !== "undefined" && selectFilterMode) selectFilterMode.value = settings.filter_mode || "all";
+
+        if (typeof studioPrefix !== "undefined" && studioPrefix) studioPrefix.value = settings.text_prefix || "";
+        if (typeof studioSuffix !== "undefined" && studioSuffix) studioSuffix.value = settings.text_suffix || "";
+        if (typeof studioFind !== "undefined" && studioFind) studioFind.value = settings.find_text || "";
+        if (typeof studioReplace !== "undefined" && studioReplace) studioReplace.value = settings.replace_text || "";
+        if (typeof studioKeyword !== "undefined" && studioKeyword) studioKeyword.value = settings.keyword_filter || "";
+
+        if (typeof chkOverrideLinks !== "undefined" && chkOverrideLinks) chkOverrideLinks.checked = settings.override_all_links ?? false;
+        if (typeof inputCustomLinkUrl !== "undefined" && inputCustomLinkUrl) inputCustomLinkUrl.value = settings.custom_link_url || "";
+        if (typeof chkRemoveLinks !== "undefined" && chkRemoveLinks) chkRemoveLinks.checked = settings.remove_all_links ?? false;
+
+        if (typeof overviewWebhookUrl !== "undefined" && overviewWebhookUrl) {
             overviewWebhookUrl.textContent = settings.webhook_url || "Not Configured";
         }
     }
+
 
     // Save Studio Rules
     if (btnSaveStudioRules) {
@@ -744,36 +578,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 custom_link_url: inputCustomLinkUrl.value,
                 remove_all_links: chkRemoveLinks.checked,
                 keyword_filter: studioKeyword.value,
-                filter_mode: selectFilterMode.value,
-                forward_media: chkForwardMedia.checked,
-                replace_media: chkReplaceMedia.checked,
-                custom_media_url: inputCustomMediaUrl.value
-            };
-
-        document.querySelectorAll(".btn-open-send").forEach(b => {
-            b.addEventListener("click", () => {
-                const id = b.getAttribute("data-id");
-                const name = b.getAttribute("data-name");
-                openSendMessageModal(id, name);
-            });
-        });
-    }
-
-    // Save Settings Form
-    if (settingsForm) {
-        settingsForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
-            btnSaveSettings.disabled = true;
-            btnSaveSettings.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-
-            const payload = {
-                webhook_url: inputWebhookUrlAlt.value,
-                text_prefix: inputPrefix.value,
-                text_suffix: inputSuffix.value,
+                filter_mode: selectFilterMode.value
             };
 
             try {
-                const res = await fetch("/api/config", {
+                const res = await authFetch("/api/config", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
@@ -782,13 +591,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (data.success) {
                     state.settings = data.settings;
                     populateSettingsUI(data.settings);
-                    alert("✅ Settings Saved Successfully!");
+                    alert("✅ Multi-Rule Modifier Engine Settings Saved!");
                 }
             } catch (err) {
-                alert("❌ Error saving settings: " + err);
+                alert("❌ Error saving studio rules: " + err);
             } finally {
-                btnSaveSettings.disabled = false;
-                btnSaveSettings.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
+                btnSaveStudioRules.disabled = false;
+                btnSaveStudioRules.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Rules';
             }
         });
     }
@@ -796,6 +605,112 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- Live Studio Sandbox Preview (Multi-Rule & Smart Link Engine) ---
     function updateStudioSandbox() {
         let text = activeSampleMessageText;
+
+        // 1. Structured Multi-Rules
+        if (state.replacementRules && state.replacementRules.length > 0) {
+            state.replacementRules.forEach(rule => {
+                if (rule.find) {
+                    text = text.replace(new RegExp(escapeRegExp(rule.find), 'g'), rule.replace || '');
+                }
+            });
+        }
+
+        // 2. Bulk Comma-Separated Mode
+        const findVal = studioFind.value;
+        const replaceVal = studioReplace.value;
+
+        if (findVal) {
+            const findList = findVal.split(",").map(f => f.trim()).filter(f => f);
+            const replaceList = replaceVal.split(",").map(r => r.trim());
+
+            findList.forEach((fWord, i) => {
+                const rWord = (i < replaceList.length) ? replaceList[i] : (replaceList.length > 0 ? replaceList[replaceList.length - 1] : "");
+                text = text.replace(new RegExp(escapeRegExp(fWord), 'g'), rWord);
+            });
+        }
+
+        // 3. Smart Universal Link Override / Link Removal
+        const urlPattern = /https?:\/\/[^\s<>"'\)]+/g;
+        if (chkRemoveLinks && chkRemoveLinks.checked) {
+            text = text.replace(urlPattern, '');
+        } else if (chkOverrideLinks && chkOverrideLinks.checked && inputCustomLinkUrl.value.trim()) {
+            text = text.replace(urlPattern, inputCustomLinkUrl.value.trim());
+        }
+
+        // 4. Prefix & Suffix
+        const prefixVal = studioPrefix.value;
+        const suffixVal = studioSuffix.value;
+
+        if (prefixVal) text = `${prefixVal}${text}`;
+        if (suffixVal) text = `${text}${suffixVal}`;
+
+        studioTransformedPreview.textContent = text;
+        if (sandboxResultText) sandboxResultText.textContent = text;
+    }
+
+    [studioPrefix, studioSuffix, studioFind, studioReplace, studioKeyword, selectFilterMode, chkOverrideLinks, inputCustomLinkUrl, chkRemoveLinks].forEach(el => {
+        if (el) {
+            el.addEventListener("input", updateStudioSandbox);
+            el.addEventListener("change", updateStudioSandbox);
+        }
+    });
+
+    // --- Channels Explorer UI ---
+    function renderChannelsGrid() {
+        if (!channelsGrid) return;
+        let filtered = state.channels;
+
+        if (state.activeChannelFilter !== "all") {
+            filtered = filtered.filter(c => c.type.toLowerCase().includes(state.activeChannelFilter.toLowerCase()));
+        }
+
+        if (state.searchQuery) {
+            const q = state.searchQuery.toLowerCase();
+            filtered = filtered.filter(c => c.name.toLowerCase().includes(q) || c.id.includes(q));
+        }
+
+        if (filtered.length === 0) {
+            channelsGrid.innerHTML = `
+                <div class="card glass-card text-center full-width-card" style="padding: 40px; grid-column: 1 / -1;">
+                    <i class="fa-solid fa-comments" style="font-size: 36px; color: var(--text-muted); margin-bottom: 12px;"></i>
+                    <h4>No chats found matching criteria</h4>
+                </div>
+            `;
+            return;
+        }
+
+        channelsGrid.innerHTML = filtered.map(chat => {
+            let iconClass = "fa-user";
+            if (chat.is_channel) iconClass = "fa-bullhorn";
+            else if (chat.is_group) iconClass = "fa-users";
+
+            return `
+                <div class="channel-card">
+                    <div class="channel-card-top">
+                        <div class="channel-icon-box"><i class="fa-solid ${iconClass}"></i></div>
+                        <div class="channel-info">
+                            <h4>${escapeHtml(chat.name)}</h4>
+                            <span class="channel-id-tag">ID: ${chat.id}</span>
+                        </div>
+                    </div>
+                    <div class="channel-card-bottom">
+                        <span class="chat-type-badge">${chat.type}</span>
+                        <button class="btn btn-outline btn-sm btn-compose-msg" data-id="${chat.id}" data-name="${escapeHtml(chat.name)}">
+                            <i class="fa-solid fa-paper-plane"></i> Send
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join("");
+
+        document.querySelectorAll(".btn-compose-msg").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const id = btn.getAttribute("data-id");
+                const name = btn.getAttribute("data-name");
+                openSendMessageModal(id, name);
+            });
+        });
+    }
 
     filterPills.forEach(pill => {
         pill.addEventListener("click", () => {
@@ -806,224 +721,101 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
-    if (btnFetchChannels) {
-        btnFetchChannels.addEventListener("click", fetchChannels);
-    }
-
-    // --- Studio Sandbox Modifier Engine ---
-    async function updateStudioSandbox() {
-        const payload = {
-            sample_text: activeSampleMessageText,
-            text_prefix: studioPrefix ? studioPrefix.value : "",
-            text_suffix: studioSuffix ? studioSuffix.value : "",
-            find_text: studioFind ? studioFind.value : "",
-            replace_text: studioReplace ? studioReplace.value : "",
-            replacement_rules: state.replacementRules,
-            override_all_links: chkOverrideLinks ? chkOverrideLinks.checked : false,
-            custom_link_url: inputCustomLinkUrl ? inputCustomLinkUrl.value : "",
-            remove_all_links: chkRemoveLinks ? chkRemoveLinks.checked : false,
-            keyword_filter: studioKeyword ? studioKeyword.value : "",
-            filter_mode: selectFilterMode ? selectFilterMode.value : "all"
-        };
-
-        if (sandboxSampleText) sandboxSampleText.value = activeSampleMessageText;
-
-        try {
-            const res = await apiFetch("/api/test-transform", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-
-            if (studioTransformedPreview) studioTransformedPreview.textContent = data.transformed_text;
-            if (sandboxResultText) sandboxResultText.value = data.transformed_text;
-
-            if (sandboxStatusBadge) {
-                if (data.should_forward) {
-                    sandboxStatusBadge.className = "status-tag status-success";
-                    sandboxStatusBadge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Passed Filter Rules';
-                } else {
-                    sandboxStatusBadge.className = "status-tag status-danger";
-                    sandboxStatusBadge.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> Filtered: ${data.reason}`;
-                }
-            }
-        } catch (err) {
-            console.error("Sandbox evaluation error:", err);
-        }
-    }
-
-    [studioPrefix, studioSuffix, studioFind, studioReplace, studioKeyword, selectFilterMode, chkOverrideLinks, inputCustomLinkUrl, chkRemoveLinks, switchAutoTelegram].forEach(el => {
-        if (el) el.addEventListener("input", updateStudioSandbox);
-        if (el) el.addEventListener("change", updateStudioSandbox);
-    });
-
-    if (sandboxSampleText) {
-        sandboxSampleText.addEventListener("input", (e) => {
-            activeSampleMessageText = e.target.value;
-            updateStudioSandbox();
+    if (channelSearchInput) {
+        channelSearchInput.addEventListener("input", (e) => {
+            state.searchQuery = e.target.value;
+            renderChannelsGrid();
         });
     }
 
-    // --- Settings Sync ---
-    function populateSettingsUI(s) {
-        if (!s) return;
-        if (inputWebhookUrl) inputWebhookUrl.value = s.webhook_url || "";
-        if (inputWebhookUrlAlt) inputWebhookUrlAlt.value = s.webhook_url || "";
-        if (overviewWebhookUrl) overviewWebhookUrl.value = s.webhook_url || "";
+    if (btnFetchChannels) btnFetchChannels.addEventListener("click", fetchChannels);
 
-        if (studioPrefix) studioPrefix.value = s.text_prefix || "";
-        if (inputPrefix) inputPrefix.value = s.text_prefix || "";
-        if (studioSuffix) studioSuffix.value = s.text_suffix || "";
-        if (inputSuffix) inputSuffix.value = s.text_suffix || "";
-
-        if (studioFind) studioFind.value = s.find_text || "";
-        if (studioReplace) studioReplace.value = s.replace_text || "";
-
-        if (selectFilterMode) selectFilterMode.value = s.filter_mode || "all";
-        if (studioKeyword) studioKeyword.value = s.keyword_filter || "";
-
-        if (chkOverrideLinks) chkOverrideLinks.checked = s.override_all_links || false;
-        if (inputCustomLinkUrl) inputCustomLinkUrl.value = s.custom_link_url || "";
-        if (chkRemoveLinks) chkRemoveLinks.checked = s.remove_all_links || false;
-
-        if (switchAutoTelegram) switchAutoTelegram.checked = s.auto_post_telegram !== false;
-    }
-
-    async function saveStudioSettings() {
-        const payload = {
-            webhook_url: inputWebhookUrl ? inputWebhookUrl.value : "",
-            source_channel_id: selectSourceChannel ? selectSourceChannel.value : "all",
-            destination_channel_id: selectDestChannel ? selectDestChannel.value : "",
-            auto_post_telegram: switchAutoTelegram ? switchAutoTelegram.checked : true,
-            text_prefix: studioPrefix ? studioPrefix.value : "",
-            text_suffix: studioSuffix ? studioSuffix.value : "",
-            find_text: studioFind ? studioFind.value : "",
-            replace_text: studioReplace ? studioReplace.value : "",
-            replacement_rules: state.replacementRules,
-            override_all_links: chkOverrideLinks ? chkOverrideLinks.checked : false,
-            custom_link_url: inputCustomLinkUrl ? inputCustomLinkUrl.value : "",
-            remove_all_links: chkRemoveLinks ? chkRemoveLinks.checked : false,
-            keyword_filter: studioKeyword ? studioKeyword.value : "",
-            filter_mode: selectFilterMode ? selectFilterMode.value : "all"
-        };
-
-        try {
-            const res = await apiFetch("/api/config", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (data.success) {
-                state.settings = data.settings;
-                alert("✅ Sync & Rule settings saved to Supabase profile!");
-            }
-        } catch (err) {
-            alert("Error saving settings: " + err);
-        }
-    }
-
-    if (btnSaveStudioRules) btnSaveStudioRules.addEventListener("click", saveStudioSettings);
-    if (btnSaveSettings) btnSaveSettings.addEventListener("click", saveStudioSettings);
-
-    if (settingsForm) {
-        settingsForm.addEventListener("submit", (e) => {
-            e.preventDefault();
-            if (inputWebhookUrlAlt && inputWebhookUrl) inputWebhookUrl.value = inputWebhookUrlAlt.value;
-            if (inputPrefix && studioPrefix) studioPrefix.value = inputPrefix.value;
-            if (inputSuffix && studioSuffix) studioSuffix.value = inputSuffix.value;
-            saveStudioSettings();
-        });
-    }
-
-    // --- Message Sync Logs & Feed ---
+    // --- Live Messages Stream ---
     async function fetchMessages() {
         try {
-            const res = await apiFetch("/api/messages");
+            const res = await authFetch("/api/messages");
             const data = await res.json();
             if (data.success) {
                 state.messages = data.messages || [];
-                renderLogsFeed(state.messages);
-                renderOverviewTable(state.messages.slice(0, 5));
-                if (data.stats && statReceived) {
-                    statReceived.textContent = data.stats.received || 0;
-                    statForwarded.textContent = data.stats.forwarded || 0;
-                    statFiltered.textContent = data.stats.filtered || 0;
+                renderMessagesTables(state.messages);
+
+                if (selectSourceChannel && selectSourceChannel.value === "all") {
+                    renderSourceChatFeed(state.messages.map(m => ({
+                        id: m.id,
+                        text: m.raw_message,
+                        sender_name: m.chat_name,
+                        date: m.date
+                    })));
                 }
             }
         } catch (err) {
-            console.error("Error fetching message feed:", err);
+            console.error("Error fetching message logs:", err);
         }
     }
 
-    function renderOverviewTable(messages) {
-        if (!overviewRecentTable) return;
+    function renderMessagesTables(messages) {
         if (!messages || messages.length === 0) {
-            overviewRecentTable.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No messages intercepted yet.</td></tr>';
+            const emptyHtml = '<tr><td colspan="6" class="text-center text-muted">No messages intercepted yet.</td></tr>';
+            if (overviewRecentTable) overviewRecentTable.innerHTML = emptyHtml;
+            if (fullLogsTable) fullLogsTable.innerHTML = emptyHtml;
             return;
         }
 
-        overviewRecentTable.innerHTML = messages.map(m => `
+        const overviewRows = messages.slice(0, 5).map(m => `
             <tr>
-                <td>${formatIST(m.created_at || m.date)}</td>
-                <td><strong>${escapeHtml(m.chat_name || 'Chat')}</strong></td>
-                <td><div class="text-truncate" style="max-width: 250px;">${escapeHtml(m.transformed_message || m.raw_message || '')}</div></td>
-                <td><span class="status-tag status-success">${m.status || 'Synced'}</span></td>
+                <td>${m.date}</td>
+                <td><strong>${escapeHtml(m.chat_name)}</strong></td>
+                <td><code>${escapeHtml(m.raw_message)}</code></td>
+                <td><code style="color: var(--accent-green);">${escapeHtml(m.transformed_message)}</code></td>
+                <td><span class="badge ${m.status.includes('sent') || m.status.includes('synced') ? 'badge-success' : 'badge-warning'}">${m.status}</span></td>
             </tr>
         `).join("");
-    }
+        if (overviewRecentTable) overviewRecentTable.innerHTML = overviewRows;
 
-    function renderLogsFeed(messages) {
-        if (!fullLogsTable) return;
-        if (!messages || messages.length === 0) {
-            fullLogsTable.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No message logs recorded yet.</td></tr>';
-            return;
-        }
-
-        fullLogsTable.innerHTML = messages.map(m => `
+        const fullRows = messages.map(m => `
             <tr>
-                <td><code>${m.id || m.telegram_message_id || ''}</code></td>
-                <td>${formatIST(m.created_at || m.date)}</td>
-                <td><strong>${escapeHtml(m.chat_name || 'Chat')}</strong></td>
-                <td><div class="text-truncate" style="max-width: 220px;" title="${escapeAttribute(m.raw_message || '')}">${escapeHtml(m.raw_message || '')}</div></td>
-                <td><div class="text-truncate" style="max-width: 220px;" title="${escapeAttribute(m.transformed_message || '')}">${escapeHtml(m.transformed_message || '')}</div></td>
-                <td><span class="status-tag ${m.status && m.status.includes('skipped') ? 'status-danger' : 'status-success'}">${m.status}</span></td>
+                <td>${m.date}</td>
+                <td><strong>${escapeHtml(m.chat_name)}</strong></td>
+                <td><span class="channel-id-tag">${m.chat_id}</span></td>
+                <td><code>${escapeHtml(m.raw_message)}</code></td>
+                <td><code style="color: var(--accent-green);">${escapeHtml(m.transformed_message)}</code></td>
+                <td><span class="badge ${m.status.includes('sent') || m.status.includes('synced') ? 'badge-success' : 'badge-warning'}">${m.status}</span></td>
             </tr>
         `).join("");
+        if (fullLogsTable) fullLogsTable.innerHTML = fullRows;
     }
 
     if (btnRefreshLogs) btnRefreshLogs.addEventListener("click", fetchMessages);
     if (btnRefreshStatus) btnRefreshStatus.addEventListener("click", fetchStatus);
 
-    // --- Modal Controllers ---
-    if (btnOpenLoginModal) {
-        btnOpenLoginModal.addEventListener("click", () => {
-            if (loginModal) loginModal.classList.add("active");
-        });
-    }
-    if (btnCloseLoginModal) {
-        btnCloseLoginModal.addEventListener("click", () => {
-            if (loginModal) loginModal.classList.remove("active");
-        });
-    }
-    if (btnCloseSendModal) {
-        btnCloseSendModal.addEventListener("click", () => {
-            if (sendMessageModal) sendMessageModal.classList.remove("active");
+    // --- Modals Logic ---
+    const openLogin = () => {
+        if (loginModal) loginModal.classList.add("active");
+    };
+
+    if (btnOpenLoginModal) btnOpenLoginModal.addEventListener("click", openLogin);
+    if (btnConnectTelegramHeader) btnConnectTelegramHeader.addEventListener("click", openLogin);
+    if (btnConnectTelegramBanner) btnConnectTelegramBanner.addEventListener("click", openLogin);
+    if (headerConnectionBadge) {
+        headerConnectionBadge.addEventListener("click", () => {
+            if (!state.authorized) openLogin();
         });
     }
 
-    // Send Telegram Phone Code
+    if (btnCloseLoginModal) btnCloseLoginModal.addEventListener("click", () => loginModal.classList.remove("active"));
+    if (btnCloseSendModal) btnCloseSendModal.addEventListener("click", () => sendMessageModal.classList.remove("active"));
+
+    // Send Phone Code
     if (btnSendPhoneCode) {
         btnSendPhoneCode.addEventListener("click", async () => {
             const phone = loginPhoneNumber.value.trim();
-            if (!phone) return alert("Please enter phone number (+91...)");
+            if (!phone) return alert("Please enter phone number");
 
             btnSendPhoneCode.disabled = true;
-            btnSendPhoneCode.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending Code...';
+            btnSendPhoneCode.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
 
             try {
-                const res = await apiFetch("/api/auth/send-code", {
+                const res = await authFetch("/api/auth/send-code", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ phone_number: phone })
@@ -1057,29 +849,21 @@ document.addEventListener("DOMContentLoaded", () => {
             btnVerifyCode.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
 
             try {
-                const res = await apiFetch("/api/auth/verify-code", {
+                const res = await authFetch("/api/auth/verify-code", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ phone_number: phone, code: code, password: pwd })
                 });
                 const data = await res.json();
                 if (data.success) {
-                    alert("🎉 Telegram connected successfully!");
-                    if (loginModal) loginModal.classList.remove("active");
+                    alert("🎉 Logged in successfully!");
+                    loginModal.classList.remove("active");
                     fetchStatus();
-                } else if (res.status === 401 && data.detail === "2FA_PASSWORD_REQUIRED") {
-                    // Show 2FA password field with a prompt
-                    if (loginPassword) {
-                        loginPassword.style.border = "2px solid #f59e0b";
-                        loginPassword.placeholder = "⚠️ Your account has 2FA - enter password here";
-                        loginPassword.focus();
-                    }
-                    alert("🔐 Your account has Two-Factor Authentication enabled.\nPlease enter your 2FA password in the field below and click Sign In again.");
                 } else {
-                    alert("❌ Error: " + (data.detail || "Invalid code"));
+                    alert("Error: " + (data.detail || "Invalid code"));
                 }
             } catch (err) {
-                alert("❌ Error: " + err);
+                alert("Error: " + err);
             } finally {
                 btnVerifyCode.disabled = false;
                 btnVerifyCode.innerHTML = '<i class="fa-solid fa-check"></i> Sign In';
@@ -1087,12 +871,42 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Disconnect Telegram Account Handler
+    if (btnDisconnectTelegram) {
+        btnDisconnectTelegram.addEventListener("click", async () => {
+            if (!confirm("Are you sure you want to disconnect your Telegram account from Telegram Sync Hub?")) return;
+
+            btnDisconnectTelegram.disabled = true;
+            btnDisconnectTelegram.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Disconnecting...';
+
+            try {
+                const res = await authFetch("/api/auth/logout-telegram", {
+                    method: "POST"
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert("✅ Telegram account disconnected successfully!");
+                    state.channels = [];
+                    fetchStatus();
+                } else {
+                    alert("Error: " + (data.detail || "Failed to disconnect Telegram account"));
+                }
+            } catch (err) {
+                alert("Error: " + err);
+            } finally {
+                btnDisconnectTelegram.disabled = false;
+                btnDisconnectTelegram.innerHTML = '<i class="fa-solid fa-plug-circle-xmark"></i> Disconnect Telegram Account';
+            }
+        });
+    }
+
+
     // Open Send Message Modal
     function openSendMessageModal(chatId, chatName) {
         sendDestinationId.value = chatId;
         sendDestinationChat.value = `${chatName} (${chatId})`;
         sendMessageText.value = "";
-        if (sendMessageModal) sendMessageModal.classList.add("active");
+        sendMessageModal.classList.add("active");
     }
 
     if (sendMessageForm) {
@@ -1106,7 +920,7 @@ document.addEventListener("DOMContentLoaded", () => {
             btnSubmitSend.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
 
             try {
-                const res = await apiFetch("/api/send", {
+                const res = await authFetch("/api/send", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ destination_chat_id: targetId, message: text })
@@ -1114,7 +928,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const data = await res.json();
                 if (data.success) {
                     alert("✅ Message sent successfully!");
-                    if (sendMessageModal) sendMessageModal.classList.remove("active");
+                    sendMessageModal.classList.remove("active");
                     updateStudioPanelCards();
                 }
             } catch (err) {
@@ -1137,53 +951,12 @@ document.addEventListener("DOMContentLoaded", () => {
         return str.replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
-    /**
-     * Format a date string or Date object to IST (Asia/Kolkata, UTC+5:30).
-     * If the string already ends with " IST" (set by the backend), return as-is.
-     */
-    function formatIST(dateInput) {
-        if (!dateInput) return "";
-        // Backend already sends "YYYY-MM-DD HH:MM:SS IST" — return as-is
-        if (typeof dateInput === "string" && dateInput.endsWith(" IST")) return dateInput;
-        try {
-            const d = new Date(dateInput);
-            if (isNaN(d.getTime())) return dateInput;
-            return d.toLocaleString("en-IN", {
-                timeZone: "Asia/Kolkata",
-                year: "numeric",
-                month: "2-digit",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: false
-            }) + " IST";
-        } catch (e) {
-            return dateInput;
-        }
+    function escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     // --- Init App Data ---
-    // Only run if user is authenticated (has token) or Supabase isn't configured
-    const initToken = localStorage.getItem("sb_access_token");
-    if (initToken) {
-        fetchStatus();
-        fetchMessages();
-        setInterval(fetchMessages, 5000);
-    } else {
-        // Try fetching status without token to check if supabase is configured
-        fetch("/api/status").then(res => {
-            if (res.status === 401) {
-                window.location.href = "/login";
-            } else if (res.ok) {
-                fetchStatus();
-                fetchMessages();
-                setInterval(fetchMessages, 5000);
-            }
-        }).catch(() => {
-            fetchStatus();
-            fetchMessages();
-            setInterval(fetchMessages, 5000);
-        });
-    }
+    fetchStatus();
+    fetchMessages();
+    setInterval(fetchMessages, 5000);
 });

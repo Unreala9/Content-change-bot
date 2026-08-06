@@ -1,8 +1,17 @@
 import os
+import sys
 import jwt
 from typing import Optional, Dict, Any, List
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+# Fix Windows terminal UTF-8 encoding
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except AttributeError:
+        pass
+
 from config import (
     SUPABASE_URL,
     SUPABASE_ANON_KEY,
@@ -13,6 +22,7 @@ from config import (
     load_settings,
     save_settings
 )
+
 
 # Initialize Supabase Python Client if configured
 supabase = None
@@ -79,7 +89,56 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
     )
 
 
+# --- Supabase Auth Helper Functions ---
+
+def sign_up_user(email: str, password: str) -> dict:
+    if not IS_SUPABASE_CONFIGURED or not supabase:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Supabase credentials are not configured in .env file."
+        )
+
+    try:
+        res = supabase.auth.sign_up({"email": email, "password": password})
+        if res and res.user:
+            token = res.session.access_token if res.session else None
+            return {
+                "success": True,
+                "message": "User registered successfully!",
+                "user": {"id": str(res.user.id), "email": res.user.email},
+                "access_token": token
+            }
+        raise Exception("Failed to create user account.")
+    except Exception as e:
+        detail_msg = str(e)
+        if "User already registered" in detail_msg:
+            detail_msg = "An account with this email already exists."
+        raise HTTPException(status_code=400, detail=detail_msg)
+
+
+def sign_in_user(email: str, password: str) -> dict:
+    if not IS_SUPABASE_CONFIGURED or not supabase:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Supabase credentials are not configured in .env file."
+        )
+
+    try:
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if res and res.user and res.session:
+            return {
+                "success": True,
+                "message": "Signed in successfully!",
+                "user": {"id": str(res.user.id), "email": res.user.email},
+                "access_token": res.session.access_token
+            }
+        raise Exception("Invalid email or password.")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
 # --- Supabase Database Helper Functions ---
+
 
 def get_user_settings_from_db(user_id: str) -> dict:
     if not IS_SUPABASE_CONFIGURED or not supabase or user_id == "00000000-0000-0000-0000-000000000000":

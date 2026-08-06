@@ -10,8 +10,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/style.css">
-    <!-- Supabase JS Client -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
     <div class="app-container">
@@ -61,27 +59,38 @@
                     <p id="pageSubtitle">Source Channel Extract ➔ Live Modifier Engine ➔ Destination Channel Paste</p>
                 </div>
                 <div class="header-actions">
-                    <div class="user-profile-header-chip" id="userHeaderChip" style="display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border-color, #2b3139);">
-                        <i class="fa-solid fa-user-circle text-primary"></i>
-                        <span id="headerUserEmail" style="font-size: 13px; font-weight: 500;">Local User</span>
-                        <button class="btn btn-outline btn-xs" id="btnLogoutSupabase" style="padding: 2px 8px; font-size: 11px; border-radius: 12px; display: none;">
-                            <i class="fa-solid fa-right-from-bracket"></i> Logout
-                        </button>
-                    </div>
-                    <button class="btn btn-warning btn-sm" id="btnConnectTelegram">
-                        <i class="fa-brands fa-telegram"></i> <span id="btnConnectTelegramText">Connect Telegram</span>
+                    <button class="btn btn-primary btn-sm" id="btnConnectTelegramHeader" style="display: inline-flex; align-items: center; gap: 6px; background: #0088cc; border-color: #0088cc; font-weight: 600; cursor: pointer;">
+                        <i class="fa-brands fa-telegram"></i> Connect Telegram
                     </button>
-                    <div class="pill-badge status-connected" id="headerConnectionBadge">
+                    <div class="pill-badge status-connected" id="headerConnectionBadge" style="cursor: pointer;" title="Click to connect Telegram">
                         <i class="fa-solid fa-wifi"></i> Connected
                     </div>
                     <button class="btn btn-primary btn-sm" id="btnRefreshStatus">
                         <i class="fa-solid fa-arrows-rotate"></i> Refresh
                     </button>
+                    <div id="headerUserAccount" style="display: inline-flex; align-items: center; gap: 8px; margin-left: 8px;">
+                        <span id="headerUserEmail" style="font-size: 12px; color: #707a8a; font-weight: 500;"></span>
+                        <button class="btn btn-secondary btn-sm" id="btnLogout" style="padding: 4px 10px; font-size: 12px; border-radius: 6px; background: rgba(246,70,93,0.15); color: #f6465d; border: 1px solid rgba(246,70,93,0.3); cursor: pointer;" title="Sign Out">
+                            <i class="fa-solid fa-right-from-bracket"></i> Logout
+                        </button>
+                    </div>
                 </div>
+
             </header>
 
             <!-- TAB 0: SIDE-BY-SIDE STUDIO (DEFAULT) -->
             <section class="tab-content active" id="tab-studio">
+                <!-- TELEGRAM DISCONNECTED BANNER -->
+                <div id="telegramAuthBanner" style="display: none; background: rgba(0, 136, 204, 0.12); border: 1px solid rgba(0, 136, 204, 0.35); border-radius: 10px; padding: 12px 18px; margin-bottom: 16px; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 12px; color: #eaecef; font-size: 13px;">
+                        <i class="fa-brands fa-telegram" style="font-size: 22px; color: #0088cc;"></i>
+                        <span><strong>Telegram Account Not Connected:</strong> Connect your Telegram account to fetch channels, extract live messages, and enable auto-posting.</span>
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="btnConnectTelegramBanner" style="background: #0088cc; border-color: #0088cc; font-weight: 600; white-space: nowrap; cursor: pointer;">
+                        <i class="fa-solid fa-plug"></i> Connect Telegram Account
+                    </button>
+                </div>
+
                 <!-- TOP SELECTION CONTROL BAR -->
                 <div class="studio-top-bar">
                     <!-- Left: Source Select -->
@@ -222,26 +231,6 @@
                                     </div>
                                 </div>
 
-                                <!-- Image & Media Settings Card -->
-                                <div class="link-modifier-card" style="margin-top: 10px;">
-                                    <div class="card-title"><i class="fa-solid fa-image text-green"></i> Image & Media Settings</div>
-                                    <div class="form-group">
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" id="chkForwardMedia" checked>
-                                            <span><strong>Forward Image / Media Attachments</strong></span>
-                                        </label>
-                                        <small class="form-text text-muted">If unchecked, the bot will drop the image and only forward the text caption.</small>
-                                    </div>
-                                    <div class="form-group mb-0">
-                                        <label class="checkbox-label">
-                                            <input type="checkbox" id="chkReplaceMedia">
-                                            <span>Replace Image with Custom Image</span>
-                                        </label>
-                                        <input type="text" id="inputCustomMediaUrl" class="form-control" placeholder="https://example.com/custom_image.jpg" style="margin-top: 6px;">
-                                        <small class="form-text text-muted">A URL or local path to a custom image file to replace the original image.</small>
-                                    </div>
-                                </div>
-
                                 <!-- Filter Rules -->
                                 <div class="form-row" style="margin-top: 10px;">
                                     <div class="form-group col">
@@ -343,11 +332,15 @@
                                     <p id="userPhone" class="text-muted">--</p>
                                 </div>
                             </div>
-                            <div class="profile-actions">
+                            <div class="profile-actions" style="display: flex; gap: 10px; margin-top: 14px;">
                                 <button class="btn btn-outline" id="btnOpenLoginModal">
                                     <i class="fa-solid fa-key"></i> Authenticate Account
                                 </button>
+                                <button class="btn btn-secondary" id="btnDisconnectTelegram" style="display: none; background: rgba(246,70,93,0.15); color: #f6465d; border: 1px solid rgba(246,70,93,0.3); font-weight: 600; cursor: pointer;">
+                                    <i class="fa-solid fa-plug-circle-xmark"></i> Disconnect Telegram Account
+                                </button>
                             </div>
+
                         </div>
                     </div>
 
@@ -480,44 +473,6 @@
         </main>
     </div>
 
-    <!-- MODAL 0: Supabase User Login & Registration Modal -->
-    <div class="modal-backdrop" id="supabaseAuthModal">
-        <div class="modal-dialog" style="max-width: 420px;">
-            <div class="modal-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; color: var(--primary-color, #fcd535); margin-bottom: 8px;">
-                        <i class="fa-solid fa-layer-group"></i>
-                    </div>
-                    <h3 style="margin: 0; font-size: 22px;">Telegram Sync Hub</h3>
-                    <p style="font-size: 13px; color: var(--muted-color, #707a8a); margin-top: 4px;">Sign in to manage your multi-user sync engine</p>
-                </div>
-            </div>
-            <div class="modal-body" style="padding-top: 10px;">
-                <!-- Auth Tabs -->
-                <div class="auth-tabs" style="display: flex; gap: 8px; margin-bottom: 20px; background: rgba(0,0,0,0.2); padding: 4px; border-radius: 8px;">
-                    <button type="button" class="btn btn-sm active" id="tabAuthLogin" style="flex: 1; border-radius: 6px;">Sign In</button>
-                    <button type="button" class="btn btn-sm" id="tabAuthRegister" style="flex: 1; border-radius: 6px; background: transparent; color: var(--muted-color, #707a8a);">Sign Up</button>
-                </div>
-
-                <div id="authAlert" class="alert hidden" style="margin-bottom: 15px; padding: 10px 14px; border-radius: 6px; font-size: 13px;"></div>
-
-                <form id="formSupabaseAuth">
-                    <div class="form-group" style="margin-bottom: 14px;">
-                        <label for="authEmail" style="font-size: 13px; font-weight: 500;"><i class="fa-solid fa-envelope"></i> Email Address</label>
-                        <input type="email" id="authEmail" class="form-control" placeholder="name@example.com" required style="margin-top: 4px;">
-                    </div>
-                    <div class="form-group" style="margin-bottom: 20px;">
-                        <label for="authPassword" style="font-size: 13px; font-weight: 500;"><i class="fa-solid fa-lock"></i> Password</label>
-                        <input type="password" id="authPassword" class="form-control" placeholder="••••••••" required style="margin-top: 4px;">
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100" id="btnSubmitAuth" style="padding: 12px; font-weight: 600; font-size: 14px;">
-                        <i class="fa-solid fa-right-to-bracket"></i> Sign In to Platform
-                    </button>
-                </form>
-            </div>
-        </div>
-    </div>
-
     <!-- MODAL 1: Telegram Phone Login Modal -->
     <div class="modal-backdrop" id="loginModal">
         <div class="modal-dialog">
@@ -579,6 +534,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=1.0.1"></script>
+    <script src="/static/app.js"></script>
 </body>
 </html>
