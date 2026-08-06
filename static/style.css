@@ -888,7 +888,39 @@ h4 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text-p
 .text-success { color: var(--accent-green); }
 .text-muted { color: var(--text-muted); }
 
+.btn-xs {
+    padding: 3px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+}
+
+.alert {
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+
+.alert-danger {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
+}
+
+.alert-success {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #34d399;
+}
+
+.auth-tabs .btn.active {
+    background: var(--primary-color, #fcd535) !important;
+    color: #181a20 !important;
+    font-weight: 600;
+}
+
 @media (max-width: 1200px) {
     .studio-grid-3cols { grid-template-columns: 1fr; }
     .studio-top-bar { flex-direction: column; align-items: stretch; }
 }
+
