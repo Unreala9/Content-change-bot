@@ -1,24 +1,38 @@
 import os
 import sys
+import re
 import asyncio
-from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from config import IS_SUPABASE_CONFIGURED, SUPABASE_URL, SUPABASE_ANON_KEY
+from config import (
+    API_ID,
+    API_HASH,
+    SESSION_NAME,
+    PORT,
+    IS_SUPABASE_CONFIGURED,
+    load_settings,
+    save_settings
+)
 from supabase_client import (
     get_current_user,
+    sign_up_user,
+    sign_in_user,
     get_user_settings_from_db,
     save_user_settings_to_db,
     get_user_profile_from_db,
-    get_user_sync_logs_from_db,
-    supabase
+    get_user_sync_logs_from_db
 )
-from telegram_manager import telegram_manager, apply_text_transformation, to_ist
+from telegram_manager import (
+    telegram_manager,
+    get_user_messages,
+    get_user_stats
+)
 
 # Fix Windows terminal UTF-8 encoding
 if sys.platform.startswith("win"):
@@ -29,6 +43,11 @@ if sys.platform.startswith("win"):
 
 
 # --- Request Schemas ---
+class UserAuthRequest(BaseModel):
+    email: str
+    password: str
+
+
 class SendMessageRequest(BaseModel):
     destination_chat_id: str | int
     message: str
@@ -51,9 +70,6 @@ class UpdateSettingsRequest(BaseModel):
     keyword_filter: Optional[str] = None
     filter_mode: Optional[str] = None
     enabled: Optional[bool] = None
-    forward_media: Optional[bool] = None
-    replace_media: Optional[bool] = None
-    custom_media_url: Optional[str] = None
 
 
 class SendCodeRequest(BaseModel):
@@ -78,36 +94,87 @@ class TestTransformRequest(BaseModel):
     remove_all_links: Optional[bool] = False
     keyword_filter: Optional[str] = ""
     filter_mode: Optional[str] = "all"
-    forward_media: Optional[bool] = True
-    replace_media: Optional[bool] = False
-    custom_media_url: Optional[str] = ""
 
 
-class UserAuthRequest(BaseModel):
-    email: str
-    password: str
+# --- Text Transformation & Filtering Engine ---
+def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str]:
+    """
+    Applies find/replace (multi-rule & comma-separated), link modifications, prefix/suffix, and keyword filter.
+    Returns: (transformed_text, should_forward, filter_reason)
+    """
+    if not text:
+        text = ""
+
+    filter_mode = settings.get("filter_mode", "all")
+    keyword_filter = settings.get("keyword_filter", "").strip()
+
+    # Keyword Filter logic
+    if filter_mode == "contains" and keyword_filter:
+        keywords = [k.strip().lower() for k in keyword_filter.split(",") if k.strip()]
+        text_lower = text.lower()
+        if not any(kw in text_lower for kw in keywords):
+            return text, False, f"Keyword missing (filter: '{keyword_filter}')"
+
+    transformed = text
+
+    # 1. Multiple Structured Replacement Rules (List of {"find": "...", "replace": "..."})
+    rules = settings.get("replacement_rules", [])
+    if isinstance(rules, list):
+        for rule in rules:
+            if isinstance(rule, dict):
+                find_val = rule.get("find", "")
+                replace_val = rule.get("replace", "")
+                if find_val:
+                    transformed = transformed.replace(find_val, replace_val)
+
+    # 2. Comma-separated find_text & replace_text (Bulk multi-word mapping support)
+    find_text = settings.get("find_text", "")
+    replace_text = settings.get("replace_text", "")
+    if find_text:
+        find_list = [f.strip() for f in find_text.split(",") if f.strip()]
+        replace_list = [r.strip() for r in replace_text.split(",")]
+        for i, f_word in enumerate(find_list):
+            r_word = replace_list[i] if i < len(replace_list) else (replace_list[-1] if replace_list else "")
+            if f_word:
+                transformed = transformed.replace(f_word, r_word)
+
+    # 3. Smart Link Modifier Engine (Universal URL Override / Link Removal)
+    remove_all_links = settings.get("remove_all_links", False)
+    override_all_links = settings.get("override_all_links", False)
+    custom_link_url = settings.get("custom_link_url", "").strip()
+
+    url_pattern = r'https?://[^\s<>"\'\)]+'
+
+    if remove_all_links:
+        transformed = re.sub(url_pattern, '', transformed)
+    elif override_all_links and custom_link_url:
+        transformed = re.sub(url_pattern, custom_link_url, transformed)
+
+    # 4. Prefix & Suffix
+    prefix = settings.get("text_prefix", "")
+    suffix = settings.get("text_suffix", "")
+
+    if prefix:
+        transformed = f"{prefix}{transformed}"
+    if suffix:
+        transformed = f"{transformed}{suffix}"
+
+    return transformed, True, "Passed"
 
 
 # --- FastAPI Lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 Starting Telegram Sync Hub...")
-    try:
-        await telegram_manager.init_all_users()
-    except Exception as e:
-        print(f"⚠️ Telegram Manager initialization note: {e}")
+    await telegram_manager.start()
     yield
-    print("🔌 Stopping Telegram Sync Hub...")
-    await telegram_manager.shutdown()
-    print("✅ Stopped!")
+    await telegram_manager.stop()
 
 
 # --- FastAPI App ---
-app = FastAPI(title="Telegram Sync Hub & Multi-User Side-by-Side Studio", lifespan=lifespan)
+app = FastAPI(title="Telegram Sync Hub & Multi-User Studio", lifespan=lifespan)
 
-# Static files
+# Mount static files
 os.makedirs("static", exist_ok=True)
-os.makedirs(os.path.join("static", "media"), exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -121,69 +188,41 @@ async def login_page():
     return FileResponse("static/login.html")
 
 
-@app.get("/signup")
-async def signup_page():
-    return FileResponse("static/login.html")
-
-
-# --- Supabase User Auth Endpoints ---
+# --- User Authentication Endpoints ---
 
 @app.post("/api/user/signup")
-async def user_signup(credentials: UserAuthRequest):
-    if not IS_SUPABASE_CONFIGURED or not supabase:
-        raise HTTPException(
-            status_code=400,
-            detail="Supabase credentials are not configured in .env file. Please add SUPABASE_URL and SUPABASE_ANON_KEY."
-        )
-    try:
-        res = supabase.auth.sign_up({"email": credentials.email, "password": credentials.password})
-        if res.user:
-            session_data = res.session.model_dump() if res.session else None
-            return {
-                "success": True,
-                "message": "User registered successfully!",
-                "user": {"id": res.user.id, "email": res.user.email},
-                "session": session_data
-            }
-        raise HTTPException(status_code=400, detail="Signup failed.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def user_signup(data: UserAuthRequest):
+    return sign_up_user(data.email, data.password)
 
 
 @app.post("/api/user/login")
-async def user_login(credentials: UserAuthRequest):
-    if not IS_SUPABASE_CONFIGURED or not supabase:
-        raise HTTPException(
-            status_code=400,
-            detail="Supabase credentials are not configured in .env file. Please add SUPABASE_URL and SUPABASE_ANON_KEY."
-        )
-    try:
-        res = supabase.auth.sign_in_with_password({"email": credentials.email, "password": credentials.password})
-        if res.user and res.session:
-            return {
-                "success": True,
-                "access_token": res.session.access_token,
-                "refresh_token": res.session.refresh_token,
-                "user": {"id": res.user.id, "email": res.user.email}
-            }
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def user_login(data: UserAuthRequest):
+    return sign_in_user(data.email, data.password)
 
 
-# --- Protected REST API Endpoints ---
+@app.get("/api/user/me")
+async def get_user_me(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    profile = get_user_profile_from_db(user_id) if IS_SUPABASE_CONFIGURED else {}
+    return {
+        "user": current_user,
+        "profile": profile,
+        "supabase_configured": IS_SUPABASE_CONFIGURED
+    }
+
+
+# --- Telegram Sync & Studio API Endpoints ---
 
 @app.get("/api/status")
 async def get_status(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    client = telegram_manager.get_client(user_id)
+    client = await telegram_manager.get_client_for_user(user_id)
 
-    connected = False
+    connected = client.is_connected() if client else False
     is_user_authorized = False
     me_info = None
 
-    if client and client.is_connected():
-        connected = True
+    if client and connected:
         try:
             is_user_authorized = await client.is_user_authorized()
             if is_user_authorized:
@@ -196,62 +235,65 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                     "phone": me.phone or "",
                 }
         except Exception as e:
-            print(f"Error checking Telegram user auth: {e}")
+            print(f"Error reading auth status for user {user_id}: {e}")
 
-    # Load Supabase profile if client is not actively loaded yet
-    if not me_info and IS_SUPABASE_CONFIGURED:
-        profile = get_user_profile_from_db(user_id)
-        if profile and profile.get("telegram_user_id"):
-            is_user_authorized = True
-            me_info = {
-                "id": profile.get("telegram_user_id"),
-                "first_name": profile.get("telegram_first_name", ""),
-                "username": profile.get("telegram_username", ""),
-                "phone": profile.get("telegram_phone", "")
-            }
-
-    container = telegram_manager.get_user_container(user_id)
-    stats = container.stats if container else {"received": 0, "forwarded": 0, "filtered": 0, "errors": 0}
-    settings = get_user_settings_from_db(user_id)
+    settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
+    stats = get_user_stats(user_id)
 
     return {
         "connected": connected,
         "authorized": is_user_authorized,
         "user": me_info,
+        "account": current_user,
         "stats": stats,
         "settings": settings,
-        "supabase_configured": IS_SUPABASE_CONFIGURED,
-        "supabase_url": SUPABASE_URL if IS_SUPABASE_CONFIGURED else "",
-        "supabase_anon_key": SUPABASE_ANON_KEY if IS_SUPABASE_CONFIGURED else "",
-        "current_user_email": current_user.get("email", "")
+        "supabase_configured": IS_SUPABASE_CONFIGURED
     }
 
 
 @app.post("/api/auth/send-code")
 async def send_auth_code(data: SendCodeRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    return await telegram_manager.send_auth_code(user_id, data.phone_number)
+    try:
+        res = await telegram_manager.send_auth_code(user_id, data.phone_number)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/auth/verify-code")
 async def verify_auth_code(data: VerifyCodeRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    return await telegram_manager.verify_auth_code(user_id, data.phone_number, data.code, data.password)
+    try:
+        res = await telegram_manager.verify_auth_code(
+            user_id=user_id,
+            phone_number=data.phone_number,
+            code=data.code,
+            password=data.password
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/auth/disconnect")
-async def disconnect_telegram_account(current_user: dict = Depends(get_current_user)):
+@app.post("/api/auth/logout-telegram")
+async def logout_telegram(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    return await telegram_manager.disconnect_user(user_id)
+    try:
+        res = await telegram_manager.logout_user_telegram(user_id)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 @app.get("/api/channels")
 async def get_channels(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    client = telegram_manager.get_client(user_id)
+    client = await telegram_manager.get_client_for_user(user_id)
 
     if not client or not client.is_connected():
-        raise HTTPException(status_code=503, detail="Telegram client not connected for this account. Please connect your Telegram account first.")
+        raise HTTPException(status_code=503, detail="Telegram client not connected for your account.")
 
     try:
         dialogs = []
@@ -275,40 +317,19 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
 @app.get("/api/history/{chat_id}")
 async def get_chat_history(chat_id: str, limit: int = 30, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    client = telegram_manager.get_client(user_id)
+    client = await telegram_manager.get_client_for_user(user_id)
 
     if not client or not client.is_connected():
-        raise HTTPException(status_code=503, detail="Telegram client not connected")
+        raise HTTPException(status_code=503, detail="Telegram client not connected for your account.")
 
     try:
         target = int(chat_id) if (chat_id.isdigit() or chat_id.startswith("-")) else chat_id
         entity = await client.get_entity(target)
         messages = []
         async for msg in client.iter_messages(entity, limit=limit):
-            media_path = None
-            if msg.media:
-                # Search if file is already downloaded in static/media
-                prefix = f"{chat_id}_{msg.id}"
-                media_dir = os.path.join("static", "media")
-                found_file = None
-                if os.path.exists(media_dir):
-                    try:
-                        for file_name in os.listdir(media_dir):
-                            if file_name.startswith(prefix):
-                                found_file = file_name
-                                break
-                    except Exception:
-                        pass
-                if found_file:
-                    media_path = f"/static/media/{found_file}"
-                else:
-                    media_path = await download_message_media(msg, chat_id)
-
             messages.append({
                 "id": msg.id,
                 "text": msg.text or "",
-                "date": to_ist(msg.date) if msg.date else "",
-                "media_path": media_path,
                 "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
                 "sender_id": msg.sender_id,
                 "out": msg.out
@@ -321,10 +342,10 @@ async def get_chat_history(chat_id: str, limit: int = 30, current_user: dict = D
 @app.post("/api/send")
 async def send_message(data: SendMessageRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    client = telegram_manager.get_client(user_id)
+    client = await telegram_manager.get_client_for_user(user_id)
 
     if not client or not client.is_connected():
-        raise HTTPException(status_code=503, detail="Telegram client not connected")
+        raise HTTPException(status_code=503, detail="Telegram client not connected for your account.")
 
     try:
         chat_id = int(data.destination_chat_id) if (isinstance(data.destination_chat_id, str) and (data.destination_chat_id.isdigit() or data.destination_chat_id.startswith("-"))) else data.destination_chat_id
@@ -337,18 +358,25 @@ async def send_message(data: SendMessageRequest, current_user: dict = Depends(ge
 
 @app.get("/api/config")
 async def get_config(current_user: dict = Depends(get_current_user)):
-    return get_user_settings_from_db(current_user["id"])
+    user_id = current_user["id"]
+    if IS_SUPABASE_CONFIGURED:
+        return get_user_settings_from_db(user_id)
+    return load_settings()
 
 
 @app.post("/api/config")
 async def update_config(data: UpdateSettingsRequest, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     updates = data.dict(exclude_unset=True)
-    saved = save_user_settings_to_db(current_user["id"], updates)
+    if IS_SUPABASE_CONFIGURED:
+        saved = save_user_settings_to_db(user_id, updates)
+    else:
+        saved = save_settings(updates)
     return {"success": True, "settings": saved}
 
 
 @app.post("/api/test-transform")
-async def test_transform(data: TestTransformRequest):
+async def test_transform(data: TestTransformRequest, current_user: dict = Depends(get_current_user)):
     settings = data.dict()
     transformed, should_forward, reason = apply_text_transformation(data.sample_text, settings)
     return {
@@ -362,19 +390,30 @@ async def test_transform(data: TestTransformRequest):
 @app.get("/api/messages")
 async def get_messages(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    container = telegram_manager.get_user_container(user_id)
+    in_memory = get_user_messages(user_id)
+    db_logs = get_user_sync_logs_from_db(user_id) if IS_SUPABASE_CONFIGURED else []
+    stats = get_user_stats(user_id)
 
-    if IS_SUPABASE_CONFIGURED:
-        db_logs = get_user_sync_logs_from_db(user_id, limit=100)
-        messages_list = db_logs if db_logs else (list(container.recent_messages) if container else [])
-    else:
-        messages_list = list(container.recent_messages) if container else []
-
-    stats = container.stats if container else {"received": 0, "forwarded": 0, "filtered": 0, "errors": 0}
+    # Combine in-memory and DB logs gracefully
+    combined_messages = list(in_memory)
+    if db_logs and len(combined_messages) == 0:
+        for row in db_logs:
+            combined_messages.append({
+                "id": row.get("telegram_message_id"),
+                "chat_id": row.get("chat_id"),
+                "chat_name": row.get("chat_name"),
+                "raw_message": row.get("raw_message"),
+                "transformed_message": row.get("transformed_message"),
+                "date": str(row.get("created_at", "")),
+                "status": row.get("status"),
+                "reason": row.get("reason"),
+                "webhook_url": row.get("webhook_url"),
+                "telegram_posted": row.get("telegram_posted")
+            })
 
     return {
         "success": True,
-        "messages": messages_list,
+        "messages": combined_messages,
         "stats": stats
     }
 

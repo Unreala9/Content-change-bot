@@ -23,10 +23,7 @@ DEFAULT_SETTINGS = {
     "remove_all_links": False,
     "keyword_filter": "",
     "filter_mode": "all",  # "all" or "contains"
-    "enabled": True,
-    "forward_media": True,
-    "replace_media": False,
-    "custom_media_url": ""
+    "enabled": True
 }
 
 
@@ -54,8 +51,9 @@ def save_settings(new_settings: dict) -> dict:
 API_ID = int(os.getenv("TELEGRAM_API_ID", 20504953))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "d28ccc2a28a88a172294b723a305f6f8")
 SESSION_NAME = os.getenv("SESSION_NAME", "telegram_session")
+PORT = int(os.getenv("PORT", 8000))
 
-# Supabase Credentials
+# Supabase Configurations
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
