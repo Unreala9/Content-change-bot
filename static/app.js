@@ -101,6 +101,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const chkOverrideLinks = document.getElementById("chkOverrideLinks");
     const inputCustomLinkUrl = document.getElementById("inputCustomLinkUrl");
     const chkRemoveLinks = document.getElementById("chkRemoveLinks");
+    
+    // Image & Media Elements
+    const chkForwardMedia = document.getElementById("chkForwardMedia");
+    const chkReplaceMedia = document.getElementById("chkReplaceMedia");
+    const inputCustomMediaUrl = document.getElementById("inputCustomMediaUrl");
 
     // Overview & Channels Tab Elements
     const statReceived = document.getElementById("statReceived");
@@ -602,6 +607,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const channelName = m.sender_name || defaultChannelName;
             const text = m.text || m.raw_message || '';
             const msgId = m.id || (index + 1);
+            
+            const mediaHtml = m.media_path ? `
+                <div class="msg-card-media">
+                    <img src="${m.media_path}" alt="Media Attachment" class="message-image" loading="lazy" />
+                </div>
+            ` : '';
 
             return `
                 <div class="source-message-card">
@@ -609,6 +620,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span class="msg-sender-title"><i class="fa-solid fa-inbox text-blue"></i> ${escapeHtml(channelName)}</span>
                         <span class="msg-timestamp">${m.date || ''}</span>
                     </div>
+                    ${mediaHtml}
                     <div class="msg-card-body">${escapeHtml(text)}</div>
                     <div class="msg-card-footer">
                         <span class="badge badge-id-blue">ID: ${msgId}</span>
@@ -702,25 +714,41 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
         `).join("");
 
-        document.querySelectorAll(".btn-set-source").forEach(b => {
-            b.addEventListener("click", () => {
-                const id = b.getAttribute("data-id");
-                selectSourceChannel.value = id;
-                updateStudioPanelCards();
-                saveStudioSettings();
-                alert(`Set ${id} as Source Channel!`);
-            });
-        });
+        if (chkForwardMedia) chkForwardMedia.checked = settings.forward_media ?? true;
+        if (chkReplaceMedia) chkReplaceMedia.checked = settings.replace_media ?? false;
+        if (inputCustomMediaUrl) inputCustomMediaUrl.value = settings.custom_media_url || "";
 
-        document.querySelectorAll(".btn-set-dest").forEach(b => {
-            b.addEventListener("click", () => {
-                const id = b.getAttribute("data-id");
-                selectDestChannel.value = id;
-                updateStudioPanelCards();
-                saveStudioSettings();
-                alert(`Set ${id} as Destination Channel!`);
-            });
-        });
+        if (overviewWebhookUrl) {
+            overviewWebhookUrl.textContent = settings.webhook_url || "Not Configured";
+        }
+    }
+
+    // Save Studio Rules
+    if (btnSaveStudioRules) {
+        btnSaveStudioRules.addEventListener("click", async () => {
+            btnSaveStudioRules.disabled = true;
+            btnSaveStudioRules.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+            const payload = {
+                webhook_url: inputWebhookUrl.value,
+                source_channel_id: selectSourceChannel.value,
+                destination_channel_id: selectDestChannel.value,
+                auto_post_telegram: switchAutoTelegram.checked,
+                auto_post_n8n: true,
+                text_prefix: studioPrefix.value,
+                text_suffix: studioSuffix.value,
+                find_text: studioFind.value,
+                replace_text: studioReplace.value,
+                replacement_rules: state.replacementRules,
+                override_all_links: chkOverrideLinks.checked,
+                custom_link_url: inputCustomLinkUrl.value,
+                remove_all_links: chkRemoveLinks.checked,
+                keyword_filter: studioKeyword.value,
+                filter_mode: selectFilterMode.value,
+                forward_media: chkForwardMedia.checked,
+                replace_media: chkReplaceMedia.checked,
+                custom_media_url: inputCustomMediaUrl.value
+            };
 
         document.querySelectorAll(".btn-open-send").forEach(b => {
             b.addEventListener("click", () => {
@@ -731,12 +759,43 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    if (channelSearchInput) {
-        channelSearchInput.addEventListener("input", (e) => {
-            state.searchQuery = e.target.value;
-            renderChannelsGrid();
+    // Save Settings Form
+    if (settingsForm) {
+        settingsForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            btnSaveSettings.disabled = true;
+            btnSaveSettings.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+
+            const payload = {
+                webhook_url: inputWebhookUrlAlt.value,
+                text_prefix: inputPrefix.value,
+                text_suffix: inputSuffix.value,
+            };
+
+            try {
+                const res = await fetch("/api/config", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    state.settings = data.settings;
+                    populateSettingsUI(data.settings);
+                    alert("✅ Settings Saved Successfully!");
+                }
+            } catch (err) {
+                alert("❌ Error saving settings: " + err);
+            } finally {
+                btnSaveSettings.disabled = false;
+                btnSaveSettings.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Settings';
+            }
         });
     }
+
+    // --- Live Studio Sandbox Preview (Multi-Rule & Smart Link Engine) ---
+    function updateStudioSandbox() {
+        let text = activeSampleMessageText;
 
     filterPills.forEach(pill => {
         pill.addEventListener("click", () => {

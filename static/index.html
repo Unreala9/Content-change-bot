@@ -222,6 +222,26 @@
                                     </div>
                                 </div>
 
+                                <!-- Image & Media Settings Card -->
+                                <div class="link-modifier-card" style="margin-top: 10px;">
+                                    <div class="card-title"><i class="fa-solid fa-image text-green"></i> Image & Media Settings</div>
+                                    <div class="form-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="chkForwardMedia" checked>
+                                            <span><strong>Forward Image / Media Attachments</strong></span>
+                                        </label>
+                                        <small class="form-text text-muted">If unchecked, the bot will drop the image and only forward the text caption.</small>
+                                    </div>
+                                    <div class="form-group mb-0">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="chkReplaceMedia">
+                                            <span>Replace Image with Custom Image</span>
+                                        </label>
+                                        <input type="text" id="inputCustomMediaUrl" class="form-control" placeholder="https://example.com/custom_image.jpg" style="margin-top: 6px;">
+                                        <small class="form-text text-muted">A URL or local path to a custom image file to replace the original image.</small>
+                                    </div>
+                                </div>
+
                                 <!-- Filter Rules -->
                                 <div class="form-row" style="margin-top: 10px;">
                                     <div class="form-group col">
@@ -559,6 +579,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=1.0.1"></script>
 </body>
 </html>

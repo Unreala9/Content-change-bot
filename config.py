@@ -23,7 +23,10 @@ DEFAULT_SETTINGS = {
     "remove_all_links": False,
     "keyword_filter": "",
     "filter_mode": "all",  # "all" or "contains"
-    "enabled": True
+    "enabled": True,
+    "forward_media": True,
+    "replace_media": False,
+    "custom_media_url": ""
 }
 
 

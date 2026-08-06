@@ -51,6 +51,9 @@ class UpdateSettingsRequest(BaseModel):
     keyword_filter: Optional[str] = None
     filter_mode: Optional[str] = None
     enabled: Optional[bool] = None
+    forward_media: Optional[bool] = None
+    replace_media: Optional[bool] = None
+    custom_media_url: Optional[str] = None
 
 
 class SendCodeRequest(BaseModel):
@@ -75,6 +78,9 @@ class TestTransformRequest(BaseModel):
     remove_all_links: Optional[bool] = False
     keyword_filter: Optional[str] = ""
     filter_mode: Optional[str] = "all"
+    forward_media: Optional[bool] = True
+    replace_media: Optional[bool] = False
+    custom_media_url: Optional[str] = ""
 
 
 class UserAuthRequest(BaseModel):
@@ -101,6 +107,7 @@ app = FastAPI(title="Telegram Sync Hub & Multi-User Side-by-Side Studio", lifesp
 
 # Static files
 os.makedirs("static", exist_ok=True)
+os.makedirs(os.path.join("static", "media"), exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -278,10 +285,31 @@ async def get_chat_history(chat_id: str, limit: int = 30, current_user: dict = D
         entity = await client.get_entity(target)
         messages = []
         async for msg in client.iter_messages(entity, limit=limit):
+            media_path = None
+            if msg.media:
+                # Search if file is already downloaded in static/media
+                prefix = f"{chat_id}_{msg.id}"
+                media_dir = os.path.join("static", "media")
+                found_file = None
+                if os.path.exists(media_dir):
+                    try:
+                        for file_name in os.listdir(media_dir):
+                            if file_name.startswith(prefix):
+                                found_file = file_name
+                                break
+                    except Exception:
+                        pass
+                if found_file:
+                    media_path = f"/static/media/{found_file}"
+                else:
+                    media_path = await download_message_media(msg, chat_id)
+
             messages.append({
                 "id": msg.id,
                 "text": msg.text or "",
                 "date": to_ist(msg.date) if msg.date else "",
+                "media_path": media_path,
+                "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
                 "sender_id": msg.sender_id,
                 "out": msg.out
             })
@@ -353,4 +381,4 @@ async def get_messages(current_user: dict = Depends(get_current_user)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)

@@ -526,6 +526,32 @@ body {
     background: rgba(255, 255, 255, 0.05);
 }
 
+/* Media Attachments in Messages */
+.msg-card-media {
+    margin-top: 5px;
+    margin-bottom: 5px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    max-height: 300px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.message-image {
+    max-width: 100%;
+    max-height: 300px;
+    object-fit: contain;
+    transition: transform var(--transition-fast);
+}
+
+.message-image:hover {
+    transform: scale(1.02);
+    cursor: zoom-in;
+}
+
 .msg-card-header {
     display: flex;
     justify-content: space-between;
