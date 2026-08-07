@@ -331,9 +331,6 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                 "phone": profile.get("telegram_phone") or ""
             }
 
-    if has_session and not is_authorized:
-        session_expired = True
-
     settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
     stats = get_user_stats(user_id)
     subscription = get_user_subscription_from_db(user_id)

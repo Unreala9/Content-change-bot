@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function OverviewTab({ status, messages, setActiveTab, onOpenLogin }) {
+export default function OverviewTab({ status, messages, setActiveTab, onOpenLogin, onDisconnectTelegram }) {
   const stats = status?.stats || { received: 0, forwarded: 0, filtered: 0 };
   const sub = status?.subscription || { plan_name: "Free Tier", status: "active" };
 
@@ -66,6 +66,15 @@ export default function OverviewTab({ status, messages, setActiveTab, onOpenLogi
                 <p className="text-muted font-12" style={{ marginTop: "4px" }}>
                   User ID: {status.user?.id} | Phone: {status.user?.phone}
                 </p>
+                <div style={{ marginTop: "16px" }}>
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={onDisconnectTelegram}
+                    style={{ borderRadius: "8px", gap: "6px", display: "inline-flex", alignItems: "center" }}
+                  >
+                    <i className="fa-solid fa-right-from-bracket"></i> Disconnect Telegram Account
+                  </button>
+                </div>
               </>
             ) : (
               <>

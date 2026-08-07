@@ -1,13 +1,13 @@
 import React from "react";
 
-export default function Header({ activeTab, setActiveTab, status, onOpenLogin, onRefresh, onLogoutUser }) {
+export default function Header({ activeTab, setActiveTab, status, onOpenLogin, onRefresh, onLogoutUser, onDisconnectTelegram }) {
   const isAuthorized = status?.authorized;
   const isSessionExpired = status?.session_expired;
   const tgUser = status?.user;
-  const userEmail = status?.account?.email || "shwetchourey3@gmail.com";
+  const userEmail = status?.account?.email || "";
 
   const tabTitles = {
-    "tab-studio": { title: "Side-by-Side Sync Studio", sub: "Source Channel Extract \u2192 Live Modifier Engine \u2192 Destination Channel Paste" },
+    "tab-studio": { title: "Side-by-Side Sync Studio", sub: "Source Channel Extract → Live Modifier Engine → Destination Channel Paste" },
     "tab-overview": { title: "Dashboard Overview & Stats", sub: "Real-time Telegram message listener & n8n webhook automation" },
     "tab-channels": { title: "Dialogs & Channels Matrix", sub: "Inspect, search and manage all accessible Telegram channels and chats" },
     "tab-rules": { title: "n8n & Rules Engine Config", sub: "Configure global transformation rules, replacements, and webhook targets" },
@@ -25,10 +25,43 @@ export default function Header({ activeTab, setActiveTab, status, onOpenLogin, o
       </div>
 
       <div className="header-actions" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "nowrap" }}>
+        <div
+          className="plan-badge-pill"
+          onClick={() => setActiveTab("tab-pricing")}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            background: "rgba(252, 213, 53, 0.15)",
+            color: "#fcd535",
+            border: "1px solid rgba(252, 213, 53, 0.35)",
+            padding: "6px 12px",
+            borderRadius: "8px",
+            fontSize: "12px",
+            fontWeight: "600",
+            cursor: "pointer",
+            whiteSpace: "nowrap"
+          }}
+          title="Click to view subscription plan"
+        >
+          <i className="fa-solid fa-crown" style={{ color: "#ffd700" }}></i>
+          <span>{status?.subscription?.plan_name || "Free Tier"}</span>
+        </div>
+
         {isAuthorized ? (
-          <div className="connection-badge status-online" style={{ background: "rgba(16, 185, 129, 0.15)", color: "var(--accent-green)", border: "1px solid rgba(16, 185, 129, 0.3)", padding: "6px 12px", fontSize: "12px", whiteSpace: "nowrap" }}>
-            <i className="fa-solid fa-wifi"></i>
-            <span>{tgUser?.first_name ? `Connected: ${tgUser.first_name}` : "Connected"}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div className="connection-badge status-online" style={{ background: "rgba(16, 185, 129, 0.15)", color: "var(--accent-green)", border: "1px solid rgba(16, 185, 129, 0.3)", padding: "6px 12px", fontSize: "12px", whiteSpace: "nowrap" }}>
+              <i className="fa-solid fa-wifi"></i>
+              <span>{tgUser?.first_name ? `Connected: ${tgUser.first_name}` : "Connected"}</span>
+            </div>
+            <button
+              className="btn btn-danger btn-sm"
+              style={{ padding: "6px 10px", borderRadius: "8px", fontSize: "11px", whiteSpace: "nowrap" }}
+              onClick={onDisconnectTelegram}
+              title="Disconnect Telegram Session"
+            >
+              <i className="fa-solid fa-plug-circle-xmark"></i> Disconnect TG
+            </button>
           </div>
         ) : isSessionExpired ? (
           <button

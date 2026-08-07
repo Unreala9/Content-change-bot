@@ -72,17 +72,42 @@ export default function Sidebar({ activeTab, setActiveTab, status, onLogoutUser 
       </nav>
 
       <div className="sidebar-footer">
-        <div className="account-badge">
-          <span className={`status-indicator ${isAuthorized ? "online" : (isSessionExpired ? "warning" : "offline")}`}></span>
-          <div className="account-info">
-            <span className="account-title" style={{ fontWeight: "700" }}>
-              {isAuthorized
-                ? (firstName ? `Connected: ${firstName}` : "Telegram Connected")
-                : (isSessionExpired ? `Session Expired (${firstName || phone})` : "Disconnected / Not Signed In")}
-            </span>
-            <span className="account-sub" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-              {username || phone || (isSessionExpired ? "Action required: Re-auth" : "Action required")}
-            </span>
+        <div className="account-badge" style={{ flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span className={`status-indicator ${isAuthorized ? "online" : (isSessionExpired ? "warning" : "offline")}`}></span>
+            <div className="account-info">
+              <span className="account-title" style={{ fontWeight: "700" }}>
+                {isAuthorized
+                  ? (firstName ? `Connected: ${firstName}` : "Telegram Connected")
+                  : (isSessionExpired ? `Session Expired (${firstName || phone})` : "Disconnected / Not Signed In")}
+              </span>
+              <span className="account-sub" style={{ fontSize: "11px", color: "var(--text-muted)", display: "block" }}>
+                {username || phone || (isSessionExpired ? "Action required: Re-auth" : "Action required")}
+              </span>
+            </div>
+          </div>
+
+          <div
+            onClick={() => setActiveTab("tab-pricing")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "11px",
+              fontWeight: "600",
+              color: "#fcd535",
+              background: "rgba(252, 213, 53, 0.12)",
+              padding: "4px 8px",
+              borderRadius: "6px",
+              cursor: "pointer",
+              border: "1px solid rgba(252, 213, 53, 0.25)",
+              width: "100%",
+              marginTop: "4px"
+            }}
+            title="Click to view subscription plans"
+          >
+            <i className="fa-solid fa-crown" style={{ color: "#ffd700" }}></i>
+            <span>Plan: {status?.subscription?.plan_name || "Free Tier"}</span>
           </div>
         </div>
       </div>
