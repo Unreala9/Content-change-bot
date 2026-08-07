@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { authFetch } from "./api";
 import { supabase } from "./supabase";
 
@@ -26,6 +26,22 @@ export default function App() {
   const [destinationMessages, setDestinationMessages] = useState([]);
   const [activeSourceId, setActiveSourceId] = useState(null);
   const [activeDestId, setActiveDestId] = useState(null);
+
+  const activeSourceIdRef = useRef(activeSourceId);
+  const activeDestIdRef = useRef(activeDestId);
+  const sourceRequestIdRef = useRef(0);
+  const destRequestIdRef = useRef(0);
+
+  useEffect(() => { activeSourceIdRef.current = activeSourceId; }, [activeSourceId]);
+  useEffect(() => { activeDestIdRef.current = activeDestId; }, [activeDestId]);
+
+  const isSameChannelId = (idA, idB) => {
+    if (!idA || !idB) return false;
+    if (String(idA) === String(idB)) return true;
+    const cleanA = String(idA).replace("-100", "").replace("-", "").trim();
+    const cleanB = String(idB).replace("-100", "").replace("-", "").trim();
+    return cleanA === cleanB;
+  };
 
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -82,11 +98,13 @@ export default function App() {
       }
       const data = await res.json();
       setStatus(data);
-      if (!activeSourceId && data?.settings?.source_channel_id) {
+      if (data?.settings?.source_channel_id && !activeSourceIdRef.current) {
         setActiveSourceId(data.settings.source_channel_id);
+        activeSourceIdRef.current = data.settings.source_channel_id;
       }
-      if (!activeDestId && data?.settings?.destination_channel_id) {
+      if (data?.settings?.destination_channel_id && !activeDestIdRef.current) {
         setActiveDestId(data.settings.destination_channel_id);
+        activeDestIdRef.current = data.settings.destination_channel_id;
       }
     } catch (err) {
       console.error("Error fetching status:", err);
@@ -117,30 +135,53 @@ export default function App() {
     try {
       const token = localStorage.getItem("sb_access_token") || session?.access_token;
       if (!token) return;
-      const targetId = channelId !== undefined ? channelId : (activeSourceId || status?.settings?.source_channel_id || "all");
-      if (channelId !== undefined && channelId !== null) setActiveSourceId(channelId);
 
-      if (!targetId) {
-        console.info("[fetchSourceMessages] Skipped: No target channel ID specified.");
+      const targetId = channelId !== undefined && channelId !== null
+        ? String(channelId)
+        : (activeSourceIdRef.current || status?.settings?.source_channel_id || "all");
+
+      if (channelId !== undefined && channelId !== null) {
+        setActiveSourceId(targetId);
+        activeSourceIdRef.current = targetId;
+      }
+
+      if (!targetId || targetId === "undefined" || targetId === "null") {
+        console.info("[SOURCE FETCH] Skipped: Invalid channel ID.");
         return;
       }
 
-      const url = `/api/messages?channel_id=${encodeURIComponent(targetId)}`;
-      console.info(`[fetchSourceMessages] Fetching source stream for ${targetId}: ${url}`);
+      const requestId = ++sourceRequestIdRef.current;
+      const requestedChannelId = String(targetId);
 
+      const url = `/api/messages?channel_id=${encodeURIComponent(requestedChannelId)}`;
       const res = await authFetch(url);
       if (res.status === 401) { setShowLoginPage(true); return; }
       const data = await res.json();
-      console.info(`[fetchSourceMessages] Response status: ${res.status}, success: ${data.success}, count: ${data.messages?.length || 0}`);
 
-      if (data.success && Array.isArray(data.messages) && data.messages.length > 0) {
-        console.info(`[setSourceMessages] Updating sourceMessages with ${data.messages.length} items`);
+      // Guard 1: Ignore stale out-of-order response
+      if (requestId !== sourceRequestIdRef.current) {
+        console.warn("[SOURCE FETCH] Ignoring stale out-of-order response", { requestedChannelId, requestId, current: sourceRequestIdRef.current });
+        return;
+      }
+
+      // Guard 2: Ignore response if active channel changed
+      const currentActive = activeSourceIdRef.current || status?.settings?.source_channel_id || "all";
+      if (!isSameChannelId(currentActive, requestedChannelId)) {
+        console.warn("[SOURCE FETCH] Ignoring stale response for inactive channel", { requestedChannelId, currentActive });
+        return;
+      }
+
+      console.log("[SOURCE FETCH]", {
+        channelId: requestedChannelId,
+        channelName: data.chat_name,
+        count: data.messages?.length
+      });
+
+      if (res.ok && data.success && Array.isArray(data.messages)) {
         setSourceMessages(data.messages);
-      } else if (!data.success) {
-        console.warn(`[fetchSourceMessages] Error from API: ${data.error || data.detail}. Retaining existing stream.`);
       }
     } catch (err) {
-      console.error("[fetchSourceMessages] Request failed:", err, "Retaining existing stream.");
+      console.error("[SOURCE FETCH] Request failed:", err);
     }
   };
 
@@ -148,30 +189,53 @@ export default function App() {
     try {
       const token = localStorage.getItem("sb_access_token") || session?.access_token;
       if (!token) return;
-      const targetId = channelId !== undefined ? channelId : (activeDestId || status?.settings?.destination_channel_id || "");
-      if (channelId !== undefined && channelId !== null) setActiveDestId(channelId);
 
-      if (!targetId) {
-        console.info("[fetchDestinationMessages] Skipped: No target destination ID specified.");
+      const targetId = channelId !== undefined && channelId !== null
+        ? String(channelId)
+        : (activeDestIdRef.current || status?.settings?.destination_channel_id || "");
+
+      if (channelId !== undefined && channelId !== null) {
+        setActiveDestId(targetId);
+        activeDestIdRef.current = targetId;
+      }
+
+      if (!targetId || targetId === "undefined" || targetId === "null" || targetId === "all") {
+        console.info("[DEST FETCH] Skipped: Invalid destination channel ID.");
         return;
       }
 
-      const url = `/api/messages?channel_id=${encodeURIComponent(targetId)}`;
-      console.info(`[fetchDestinationMessages] Fetching destination stream for ${targetId}: ${url}`);
+      const requestId = ++destRequestIdRef.current;
+      const requestedChannelId = String(targetId);
 
+      const url = `/api/messages?channel_id=${encodeURIComponent(requestedChannelId)}`;
       const res = await authFetch(url);
       if (res.status === 401) { setShowLoginPage(true); return; }
       const data = await res.json();
-      console.info(`[fetchDestinationMessages] Response status: ${res.status}, success: ${data.success}, count: ${data.messages?.length || 0}`);
 
-      if (data.success && Array.isArray(data.messages) && data.messages.length > 0) {
-        console.info(`[setDestinationMessages] Updating destinationMessages with ${data.messages.length} items`);
+      // Guard 1: Ignore stale out-of-order response
+      if (requestId !== destRequestIdRef.current) {
+        console.warn("[DEST FETCH] Ignoring stale out-of-order response", { requestedChannelId, requestId, current: destRequestIdRef.current });
+        return;
+      }
+
+      // Guard 2: Ignore response if active channel changed
+      const currentActive = activeDestIdRef.current || status?.settings?.destination_channel_id || "";
+      if (!isSameChannelId(currentActive, requestedChannelId)) {
+        console.warn("[DEST FETCH] Ignoring stale response for inactive channel", { requestedChannelId, currentActive });
+        return;
+      }
+
+      console.log("[DEST FETCH]", {
+        channelId: requestedChannelId,
+        channelName: data.chat_name,
+        count: data.messages?.length
+      });
+
+      if (res.ok && data.success && Array.isArray(data.messages)) {
         setDestinationMessages(data.messages);
-      } else if (!data.success) {
-        console.warn(`[fetchDestinationMessages] Error from API: ${data.error || data.detail}. Retaining existing stream.`);
       }
     } catch (err) {
-      console.error("[fetchDestinationMessages] Request failed:", err, "Retaining existing stream.");
+      console.error("[DEST FETCH] Request failed:", err);
     }
   };
 
@@ -182,8 +246,10 @@ export default function App() {
       console.info("[polling function] Running polling cycle...");
       await fetchStatus();
       await fetchChannels();
-      const currentSrc = activeSourceId || status?.settings?.source_channel_id;
-      const currentDest = activeDestId || status?.settings?.destination_channel_id;
+
+      const currentSrc = activeSourceIdRef.current || status?.settings?.source_channel_id || "all";
+      const currentDest = activeDestIdRef.current || status?.settings?.destination_channel_id;
+
       if (currentSrc) await fetchSourceMessages(currentSrc);
       if (currentDest) await fetchDestinationMessages(currentDest);
     };
@@ -195,7 +261,7 @@ export default function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [session?.access_token, authLoading, showLoginPage, activeSourceId, activeDestId]);
+  }, [session?.access_token, authLoading, showLoginPage]);
 
   const handleSaveRules = async (payload) => {
     console.info("[saveSettings] Invoked with payload:", payload);

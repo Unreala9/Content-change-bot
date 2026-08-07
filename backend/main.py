@@ -227,6 +227,7 @@ else:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|telegram\.adshatke\.site|tg\.adshatke\.site)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -508,11 +509,17 @@ async def get_messages(
                 })
 
             print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {channel_title}")
-            return {"success": True, "messages": fetched_msgs, "count": len(fetched_msgs)}
+            return {
+                "success": True,
+                "channel_id": str(channel_id),
+                "chat_name": channel_title,
+                "messages": fetched_msgs,
+                "count": len(fetched_msgs)
+            }
         except Exception as err:
             err_detail = f"Telegram error fetching channel {channel_id}: ({type(err).__name__}) {str(err)}"
             print(f"❌ {err_detail}")
-            return {"success": False, "messages": [], "error": str(err), "detail": err_detail}
+            return {"success": False, "channel_id": str(channel_id), "messages": [], "error": str(err), "detail": err_detail}
 
     # 2. Fallback to Supabase sync logs
     if IS_SUPABASE_CONFIGURED:
@@ -537,7 +544,13 @@ async def get_messages(
                 })
             print(f"[DEBUG] Messages received from DB logs: {len(formatted_logs)}")
             if formatted_logs:
-                return {"success": True, "messages": formatted_logs, "count": len(formatted_logs)}
+                return {
+                    "success": True,
+                    "channel_id": str(channel_id or "all"),
+                    "chat_name": "Sync Logs",
+                    "messages": formatted_logs,
+                    "count": len(formatted_logs)
+                }
 
     # 3. Fallback to in-memory messages
     messages = get_user_messages(user_id)
@@ -549,7 +562,13 @@ async def get_messages(
         ]
 
     print(f"[DEBUG] Messages received: {len(messages)}")
-    return {"success": True, "messages": messages, "count": len(messages)}
+    return {
+        "success": True,
+        "channel_id": str(channel_id or "all"),
+        "chat_name": "Local Cache",
+        "messages": messages,
+        "count": len(messages)
+    }
 
 
 @app.post("/api/settings")

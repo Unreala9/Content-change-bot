@@ -82,11 +82,20 @@ export default function StudioTab({
   }, [status?.settings]);
 
   useEffect(() => {
-    console.info("[STUDIO DEBUG] Selected source:", sourceChannel);
-    console.info("[STUDIO DEBUG] Selected destination:", destChannel);
-    console.info("[STUDIO DEBUG] Source messages received:", sourceMessages.length);
-    console.info("[STUDIO DEBUG] Destination messages received:", destinationMessages.length);
-  }, [sourceChannel, destChannel, sourceMessages.length, destinationMessages.length]);
+    console.log("[SOURCE RENDER]", {
+      selectedSource: sourceChannel,
+      count: sourceMessages.length,
+      firstMessageChannel: sourceMessages[0]?.chat_id
+    });
+  }, [sourceChannel, sourceMessages]);
+
+  useEffect(() => {
+    console.log("[DEST RENDER]", {
+      selectedDestination: destChannel,
+      count: destinationMessages.length,
+      firstMessageChannel: destinationMessages[0]?.chat_id
+    });
+  }, [destChannel, destinationMessages]);
 
   useEffect(() => {
     if (onFetchSourceMessages && sourceChannel) {
