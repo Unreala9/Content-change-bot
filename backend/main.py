@@ -356,7 +356,7 @@ def check_user_has_paid_subscription(user_id: str):
     sub = get_user_subscription_from_db(user_id)
     if sub.get("status") != "active" or sub.get("plan_id") not in ["plan_599", "plan_799"]:
         raise HTTPException(
-            status_code=310,
+            status_code=402,
             detail="🔒 Subscription Required: Active Basic Plan (₹599) or Pro Plan (₹799) is required to connect your Telegram account."
         )
 

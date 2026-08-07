@@ -31,13 +31,13 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
         body: JSON.stringify({ phone_number: phone })
       });
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         setStep(2);
       } else {
         setErrorMsg(data.detail || "Failed to send verification code.");
       }
     } catch (err) {
-      setErrorMsg(err.toString());
+      setErrorMsg(err.message || err.toString());
     } finally {
       setLoading(false);
     }
@@ -57,7 +57,7 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
         body: JSON.stringify({ phone_number: phone, code: code, password: password })
       });
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         onRefresh();
         onClose();
       } else {
