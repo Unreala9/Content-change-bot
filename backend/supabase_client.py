@@ -242,13 +242,25 @@ def save_user_settings_to_db(user_id: str, settings_update: dict) -> dict:
         }
         clean_row = {k: v for k, v in existing.items() if k in valid_cols}
 
-        res = supabase.table("user_settings").upsert(clean_row).execute()
+        res = supabase.table("user_settings").upsert(clean_row, on_conflict="user_id").execute()
         if res.data and len(res.data) > 0:
             saved_row = res.data[0]
             print(f"✅ [DB SAVE SUCCESS] user_settings saved for {user_id[:8]}: source={saved_row.get('source_channel_id')}, dest={saved_row.get('destination_channel_id')}")
             return saved_row
+        else:
+            up_res = supabase.table("user_settings").update(clean_row).eq("user_id", user_id).execute()
+            if up_res.data and len(up_res.data) > 0:
+                print(f"✅ [DB UPDATE FALLBACK SUCCESS] user_settings updated for {user_id[:8]}")
+                return up_res.data[0]
     except Exception as e:
         print(f"❌ Error saving user_settings to Supabase for {user_id}: {e}")
+        try:
+            up_res = supabase.table("user_settings").update(clean_row).eq("user_id", user_id).execute()
+            if up_res.data and len(up_res.data) > 0:
+                print(f"✅ [DB UPDATE FALLBACK SUCCESS] user_settings updated for {user_id[:8]}")
+                return up_res.data[0]
+        except Exception as ex:
+            print(f"❌ Fallback update user_settings failed for {user_id}: {ex}")
 
     return settings_update
 

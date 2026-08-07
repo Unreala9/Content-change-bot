@@ -41,17 +41,21 @@ export default function StudioTab({
   useEffect(() => { sourceRef.current = sourceChannel; }, [sourceChannel]);
   useEffect(() => { destRef.current = destChannel; }, [destChannel]);
 
+  const channelHydratedRef = useRef(false);
   const rulesHydratedRef = useRef(false);
 
   useEffect(() => {
     if (status?.settings) {
-      if (status.settings.source_channel_id) {
-        setSourceChannel(status.settings.source_channel_id);
-        sourceRef.current = status.settings.source_channel_id;
-      }
-      if (status.settings.destination_channel_id) {
-        setDestChannel(status.settings.destination_channel_id);
-        destRef.current = status.settings.destination_channel_id;
+      if (!channelHydratedRef.current) {
+        if (status.settings.source_channel_id) {
+          setSourceChannel(status.settings.source_channel_id);
+          sourceRef.current = status.settings.source_channel_id;
+        }
+        if (status.settings.destination_channel_id) {
+          setDestChannel(status.settings.destination_channel_id);
+          destRef.current = status.settings.destination_channel_id;
+        }
+        channelHydratedRef.current = true;
       }
       if (status.settings.auto_post_telegram !== undefined) {
         setAutoPostTg(status.settings.auto_post_telegram);
