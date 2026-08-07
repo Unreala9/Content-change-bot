@@ -653,7 +653,9 @@ async def create_subscription_order(data: CreateRazorpayOrderRequest, current_us
         }
 
         print(f"[PAYMENT] Calling Razorpay Orders API ({url}) with receipt: {receipt_id}...")
-        res = requests.post(url, json=payload, auth=auth, timeout=10)
+        def _post():
+            return requests.post(url, json=payload, auth=auth, timeout=8)
+        res = await asyncio.to_thread(_post)
         res_data = res.json()
         print(f"[PAYMENT] Order create response status {res.status_code}: {res_data}")
 

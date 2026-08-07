@@ -73,6 +73,8 @@ export default function App() {
 
   const fetchStatus = async () => {
     try {
+      const token = localStorage.getItem("sb_access_token") || session?.access_token;
+      if (!token) return;
       const res = await authFetch("/api/status");
       if (res.status === 401) {
         setShowLoginPage(true);

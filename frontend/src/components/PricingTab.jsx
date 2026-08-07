@@ -12,10 +12,11 @@ export default function PricingTab({ status, onRefresh, showToast }) {
 
   const handleSubscribe = async (planId) => {
     setLoadingPlan(planId);
+    console.info("[RAZORPAY] create order request", { plan_id: planId });
     console.info(`[PAYMENT] Requested plan: ${planId}`);
 
     try {
-      // 1. Create order
+      // 1. Create fresh order from backend
       const orderRes = await authFetch("/api/subscription/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -32,11 +33,13 @@ export default function PricingTab({ status, onRefresh, showToast }) {
       }
 
       const mode = orderData.key_id?.startsWith("rzp_live_") ? "LIVE" : "TEST";
+      console.info("[RAZORPAY] order id", orderData.order_id);
+      console.info("[RAZORPAY] order amount", orderData.amount);
       console.info(`[PAYMENT] Amount: ${orderData.amount} paise (${orderData.currency})`);
       console.info(`[PAYMENT] Razorpay mode: ${mode}`);
       console.info(`[PAYMENT] Razorpay order_id: ${orderData.order_id}`);
 
-      // 2. Launch Razorpay Checkout modal
+      // 2. Launch fresh Razorpay Checkout modal instance
       const options = {
         key: orderData.key_id,
         amount: orderData.amount,
@@ -44,6 +47,9 @@ export default function PricingTab({ status, onRefresh, showToast }) {
         name: "Telegram Sync Hub",
         description: orderData.plan_name,
         order_id: orderData.order_id,
+        retry: {
+          enabled: false // Prevents in-iframe retry on expired QR/order, ensuring retries create a FRESH backend order
+        },
         handler: async function (response) {
           console.info("[PAYMENT] Razorpay checkout callback response:", response);
           try {
@@ -86,7 +92,14 @@ export default function PricingTab({ status, onRefresh, showToast }) {
 
       if (window.Razorpay) {
         const rzp = new window.Razorpay(options);
+        rzp.on("payment.failed", function (response) {
+          console.error("[RAZORPAY] payment failed", response.error);
+          console.error("[RAZORPAY] payment error code", response.error?.code);
+          console.error("[RAZORPAY] payment error description", response.error?.description);
+          notify(`Payment Failed / Expired: ${response.error?.description || "Please retry to generate a fresh payment QR."}`, "error");
+        });
         rzp.open();
+        console.info("[RAZORPAY] checkout opened");
       } else {
         console.error("[PAYMENT] Error response: Razorpay Checkout SDK not loaded on window.");
         notify("Razorpay Checkout SDK not loaded.", "warning");
