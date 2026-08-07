@@ -41,17 +41,21 @@ export default function StudioTab({
   useEffect(() => { sourceRef.current = sourceChannel; }, [sourceChannel]);
   useEffect(() => { destRef.current = destChannel; }, [destChannel]);
 
+  const channelHydratedRef = useRef(false);
   const rulesHydratedRef = useRef(false);
 
   useEffect(() => {
     if (status?.settings) {
-      if (status.settings.source_channel_id) {
-        setSourceChannel(status.settings.source_channel_id);
-        sourceRef.current = status.settings.source_channel_id;
-      }
-      if (status.settings.destination_channel_id) {
-        setDestChannel(status.settings.destination_channel_id);
-        destRef.current = status.settings.destination_channel_id;
+      if (!channelHydratedRef.current) {
+        if (status.settings.source_channel_id) {
+          setSourceChannel(status.settings.source_channel_id);
+          sourceRef.current = status.settings.source_channel_id;
+        }
+        if (status.settings.destination_channel_id) {
+          setDestChannel(status.settings.destination_channel_id);
+          destRef.current = status.settings.destination_channel_id;
+        }
+        channelHydratedRef.current = true;
       }
       if (status.settings.auto_post_telegram !== undefined) {
         setAutoPostTg(status.settings.auto_post_telegram);
@@ -78,11 +82,20 @@ export default function StudioTab({
   }, [status?.settings]);
 
   useEffect(() => {
-    console.info("[STUDIO DEBUG] Selected source:", sourceChannel);
-    console.info("[STUDIO DEBUG] Selected destination:", destChannel);
-    console.info("[STUDIO DEBUG] Source messages received:", sourceMessages.length);
-    console.info("[STUDIO DEBUG] Destination messages received:", destinationMessages.length);
-  }, [sourceChannel, destChannel, sourceMessages.length, destinationMessages.length]);
+    console.log("[SOURCE RENDER]", {
+      selectedSource: sourceChannel,
+      count: sourceMessages.length,
+      firstMessageChannel: sourceMessages[0]?.chat_id
+    });
+  }, [sourceChannel, sourceMessages]);
+
+  useEffect(() => {
+    console.log("[DEST RENDER]", {
+      selectedDestination: destChannel,
+      count: destinationMessages.length,
+      firstMessageChannel: destinationMessages[0]?.chat_id
+    });
+  }, [destChannel, destinationMessages]);
 
   useEffect(() => {
     if (onFetchSourceMessages && sourceChannel) {
@@ -143,8 +156,19 @@ export default function StudioTab({
     });
   };
 
-  const selectedSource = channels.find(c => String(c.id) === String(sourceChannel));
-  const selectedDest = channels.find(c => String(c.id) === String(destChannel));
+  const isChannelMatch = (idA, idB) => {
+    if (!idA || !idB) return false;
+    if (String(idA) === String(idB)) return true;
+    const cleanA = String(idA).replace("-100", "").replace("-", "").trim();
+    const cleanB = String(idB).replace("-100", "").replace("-", "").trim();
+    return cleanA === cleanB;
+  };
+
+  const selectedSource = channels.find(c => isChannelMatch(c.id, sourceChannel));
+  const selectedDest = channels.find(c => isChannelMatch(c.id, destChannel));
+
+  const effectiveSourceValue = selectedSource ? selectedSource.id : sourceChannel;
+  const effectiveDestValue = selectedDest ? selectedDest.id : destChannel;
 
   const formatChannelBadge = (chId) => {
     if (!chId || chId === "all") return "Global Extract";
@@ -177,7 +201,7 @@ export default function StudioTab({
           <select
             className="form-select"
             style={{ width: "100%", height: "38px", background: "rgba(0, 0, 0, 0.5)", border: "1px solid var(--border-color)", fontWeight: "600", fontSize: "13px" }}
-            value={sourceChannel}
+            value={effectiveSourceValue}
             onChange={(e) => {
               const val = e.target.value;
               setSourceChannel(val);
@@ -195,8 +219,13 @@ export default function StudioTab({
             }}
           >
             <option value="all">⚡ All Incoming Chats (Global Extract)</option>
-            {channels.map((ch) => (
-              <option key={ch.id} value={ch.id}>
+            {effectiveSourceValue && effectiveSourceValue !== "all" && !channels.some((ch) => isChannelMatch(ch.id, effectiveSourceValue)) && (
+              <option value={effectiveSourceValue}>
+                Selected Channel ({effectiveSourceValue})
+              </option>
+            )}
+            {channels.map((ch, idx) => (
+              <option key={`src-opt-${ch.id}-${idx}`} value={ch.id}>
                 {ch.name} ({ch.type === "channel" ? "Channel" : ch.type})
               </option>
             ))}
@@ -267,7 +296,7 @@ export default function StudioTab({
             <select
               className="form-select"
               style={{ width: "100%", height: "38px", background: "rgba(0, 0, 0, 0.5)", border: "1px solid var(--border-color)", fontWeight: "600", fontSize: "13px" }}
-              value={destChannel}
+              value={effectiveDestValue}
               onChange={(e) => {
                 const val = e.target.value;
                 setDestChannel(val);
@@ -284,8 +313,13 @@ export default function StudioTab({
               }}
             >
               <option value="">-- Select Destination Channel --</option>
-              {channels.map((ch) => (
-                <option key={ch.id} value={ch.id}>
+              {effectiveDestValue && !channels.some((ch) => isChannelMatch(ch.id, effectiveDestValue)) && (
+                <option value={effectiveDestValue}>
+                  Selected Destination ({effectiveDestValue})
+                </option>
+              )}
+              {channels.map((ch, idx) => (
+                <option key={`dest-opt-${ch.id}-${idx}`} value={ch.id}>
                   {ch.name} ({ch.type === "channel" ? "Channel" : ch.type})
                 </option>
               ))}
@@ -411,7 +445,7 @@ export default function StudioTab({
                 {sourceMessages.map((m, idx) => (
                   <div
                     className="msg-card"
-                    key={m.id || idx}
+                    key={`src-msg-${m.chat_id || 'all'}-${m.id || idx}-${idx}`}
                     style={{
                       background: "rgba(13, 18, 31, 0.8)",
                       border: "1px solid var(--border-color)",
@@ -429,6 +463,12 @@ export default function StudioTab({
 
                     <div className="msg-body" style={{ fontSize: "13px", fontWeight: "600", color: "#ffffff", margin: "8px 0", lineHeight: "1.4" }}>
                       {m.raw_message}
+                      {m.has_media && (
+                        <div style={{ marginTop: "6px", display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(59, 130, 246, 0.15)", color: "#60a5fa", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "6px", padding: "2px 8px", fontSize: "11px" }}>
+                          <i className={m.media_type === "video" ? "fa-solid fa-video" : (m.media_type === "photo" ? "fa-solid fa-image" : "fa-solid fa-paperclip")}></i>
+                          <span>{m.media_type ? m.media_type.toUpperCase() : "MEDIA ATTACHMENT"}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
@@ -733,7 +773,7 @@ export default function StudioTab({
                 {destinationMessages.map((m, idx) => (
                   <div
                     className="msg-card"
-                    key={m.id || idx}
+                    key={`dest-msg-${m.chat_id || 'dest'}-${m.id || idx}-${idx}`}
                     style={{
                       background: "rgba(13, 18, 31, 0.8)",
                       border: "1px solid var(--border-color)",

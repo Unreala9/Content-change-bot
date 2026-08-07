@@ -30,7 +30,7 @@ export default function FeedTab({ messages }) {
                   </tr>
                 ) : (
                   messages.map((m, idx) => (
-                    <tr key={m.id || idx}>
+                    <tr key={`feed-msg-${m.id || idx}-${idx}`}>
                       <td style={{ fontSize: "11px", color: "var(--text-muted)" }}>{m.date}</td>
                       <td><strong>{m.chat_name}</strong></td>
                       <td><span className="badge badge-outline">{m.chat_id}</span></td>

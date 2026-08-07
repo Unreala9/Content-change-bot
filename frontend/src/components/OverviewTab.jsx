@@ -126,7 +126,7 @@ export default function OverviewTab({ status, messages, setActiveTab, onOpenLogi
                   </tr>
                 ) : (
                   messages.slice(0, 10).map((m, idx) => (
-                    <tr key={m.id || idx}>
+                    <tr key={`overview-msg-${m.id || idx}-${idx}`}>
                       <td style={{ fontSize: "11px", color: "var(--text-muted)" }}>{m.date}</td>
                       <td><strong>{m.chat_name}</strong></td>
                       <td><code>{m.raw_message}</code></td>

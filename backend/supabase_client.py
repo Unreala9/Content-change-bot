@@ -237,18 +237,31 @@ def save_user_settings_to_db(user_id: str, settings_update: dict) -> dict:
             "id", "user_id", "webhook_url", "source_channel_id", "destination_channel_id",
             "auto_post_telegram", "auto_post_n8n", "text_prefix", "text_suffix",
             "find_text", "replace_text", "replacement_rules", "override_all_links",
-            "custom_link_url", "remove_all_links", "keyword_filter", "filter_mode",
+            "custom_link_url", "remove_all_links", "override_media_image", "custom_image_url",
+            "strip_media_images", "keyword_filter", "filter_mode",
             "enabled", "created_at", "updated_at"
         }
         clean_row = {k: v for k, v in existing.items() if k in valid_cols}
 
-        res = supabase.table("user_settings").upsert(clean_row).execute()
+        res = supabase.table("user_settings").upsert(clean_row, on_conflict="user_id").execute()
         if res.data and len(res.data) > 0:
             saved_row = res.data[0]
             print(f"✅ [DB SAVE SUCCESS] user_settings saved for {user_id[:8]}: source={saved_row.get('source_channel_id')}, dest={saved_row.get('destination_channel_id')}")
             return saved_row
+        else:
+            up_res = supabase.table("user_settings").update(clean_row).eq("user_id", user_id).execute()
+            if up_res.data and len(up_res.data) > 0:
+                print(f"✅ [DB UPDATE FALLBACK SUCCESS] user_settings updated for {user_id[:8]}")
+                return up_res.data[0]
     except Exception as e:
         print(f"❌ Error saving user_settings to Supabase for {user_id}: {e}")
+        try:
+            up_res = supabase.table("user_settings").update(clean_row).eq("user_id", user_id).execute()
+            if up_res.data and len(up_res.data) > 0:
+                print(f"✅ [DB UPDATE FALLBACK SUCCESS] user_settings updated for {user_id[:8]}")
+                return up_res.data[0]
+        except Exception as ex:
+            print(f"❌ Fallback update user_settings failed for {user_id}: {ex}")
 
     return settings_update
 
@@ -404,10 +417,30 @@ def update_user_subscription_in_db(user_id: str, sub_data: dict) -> dict:
 
     try:
         sub_data["user_id"] = user_id
-        res = supabase.table("subscriptions").upsert(sub_data).execute()
-        if res.data:
+        # Use on_conflict="user_id" so upsert updates existing user record without unique key constraint failure
+        res = supabase.table("subscriptions").upsert(sub_data, on_conflict="user_id").execute()
+        if res.data and len(res.data) > 0:
+            print(f"[SUPABASE DB] Subscription updated via upsert for user {user_id}: {res.data[0]}")
             return res.data[0]
+        else:
+            # Fallback: try update directly
+            up_res = supabase.table("subscriptions").update(sub_data).eq("user_id", user_id).execute()
+            if up_res.data and len(up_res.data) > 0:
+                print(f"[SUPABASE DB] Subscription updated via update for user {user_id}")
+                return up_res.data[0]
+            else:
+                ins_res = supabase.table("subscriptions").insert(sub_data).execute()
+                if ins_res.data:
+                    print(f"[SUPABASE DB] Subscription inserted via insert for user {user_id}")
+                    return ins_res.data[0]
     except Exception as e:
-        print(f"Error saving subscription to Supabase for {user_id}: {e}")
+        print(f"[SUPABASE DB ERROR] Error saving subscription to Supabase for {user_id}: {e}")
+        try:
+            up_res = supabase.table("subscriptions").update(sub_data).eq("user_id", user_id).execute()
+            if up_res.data and len(up_res.data) > 0:
+                print(f"[SUPABASE DB] Subscription fallback update succeeded for user {user_id}")
+                return up_res.data[0]
+        except Exception as ex:
+            print(f"[SUPABASE DB ERROR] Secondary fallback update failed for {user_id}: {ex}")
 
     return sub_data

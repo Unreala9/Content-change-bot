@@ -12,23 +12,34 @@ export default function PricingTab({ status, onRefresh, showToast }) {
 
   const handleSubscribe = async (planId) => {
     setLoadingPlan(planId);
+    console.info("[RAZORPAY] create order request", { plan_id: planId });
+    console.info(`[PAYMENT] Requested plan: ${planId}`);
 
     try {
-      // 1. Create order
+      // 1. Create fresh order from backend
       const orderRes = await authFetch("/api/subscription/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan_id: planId })
       });
       const orderData = await orderRes.json();
+      console.info("[PAYMENT] Order create response:", orderData);
 
-      if (!orderRes.ok || !orderData.success) {
-        notify("Payment Order Error: " + (orderData.detail || "Could not initialize payment."), "error");
+      if (!orderRes.ok || !orderData.success || !orderData.order_id || !orderData.order_id.startsWith("order_")) {
+        console.error("[PAYMENT] Error response:", orderData);
+        notify("Payment Order Error: " + (orderData.detail || "Could not initialize payment order."), "error");
         setLoadingPlan(null);
         return;
       }
 
-      // 2. Launch Razorpay Checkout modal
+      const mode = orderData.key_id?.startsWith("rzp_live_") ? "LIVE" : "TEST";
+      console.info("[RAZORPAY] order id", orderData.order_id);
+      console.info("[RAZORPAY] order amount", orderData.amount);
+      console.info(`[PAYMENT] Amount: ${orderData.amount} paise (${orderData.currency})`);
+      console.info(`[PAYMENT] Razorpay mode: ${mode}`);
+      console.info(`[PAYMENT] Razorpay order_id: ${orderData.order_id}`);
+
+      // 2. Launch fresh Razorpay Checkout modal instance
       const options = {
         key: orderData.key_id,
         amount: orderData.amount,
@@ -36,7 +47,11 @@ export default function PricingTab({ status, onRefresh, showToast }) {
         name: "Telegram Sync Hub",
         description: orderData.plan_name,
         order_id: orderData.order_id,
+        retry: {
+          enabled: false // Prevents in-iframe retry on expired QR/order, ensuring retries create a FRESH backend order
+        },
         handler: async function (response) {
+          console.info("[PAYMENT] Razorpay checkout callback response:", response);
           try {
             const verifyRes = await authFetch("/api/subscription/verify-payment", {
               method: "POST",
@@ -50,12 +65,15 @@ export default function PricingTab({ status, onRefresh, showToast }) {
             });
             const verifyData = await verifyRes.json();
             if (verifyData.success) {
+              console.info("[PAYMENT] Signature verification succeeded. Subscription activated:", verifyData);
               notify("🎉 Payment Verified! Plan activated successfully!", "success");
               onRefresh();
             } else {
+              console.error("[PAYMENT] Verification failed:", verifyData);
               notify("Payment Verification Error: " + verifyData.detail, "error");
             }
           } catch (e) {
+            console.error("[PAYMENT] Verification network error:", e);
             notify("Verification network error: " + e, "error");
           }
         },
@@ -64,13 +82,30 @@ export default function PricingTab({ status, onRefresh, showToast }) {
         }
       };
 
+      console.info("[PAYMENT] Checkout options:", {
+        key_id: options.key,
+        amount: options.amount,
+        currency: options.currency,
+        order_id: options.order_id,
+        plan: options.description
+      });
+
       if (window.Razorpay) {
         const rzp = new window.Razorpay(options);
+        rzp.on("payment.failed", function (response) {
+          console.error("[RAZORPAY] payment failed", response.error);
+          console.error("[RAZORPAY] payment error code", response.error?.code);
+          console.error("[RAZORPAY] payment error description", response.error?.description);
+          notify(`Payment Failed / Expired: ${response.error?.description || "Please retry to generate a fresh payment QR."}`, "error");
+        });
         rzp.open();
+        console.info("[RAZORPAY] checkout opened");
       } else {
+        console.error("[PAYMENT] Error response: Razorpay Checkout SDK not loaded on window.");
         notify("Razorpay Checkout SDK not loaded.", "warning");
       }
     } catch (err) {
+      console.error("[PAYMENT] Subscription Error:", err);
       notify("Subscription Error: " + err, "error");
     } finally {
       setLoadingPlan(null);

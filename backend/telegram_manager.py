@@ -228,9 +228,12 @@ class MultiUserTelegramManager:
                         custom_image_url = settings.get("custom_image_url", "").strip()
                         strip_media = settings.get("strip_media_images", False)
 
-                        if override_image and custom_image_url:
+                        if strip_media:
+                            await client.send_message(entity=dest_entity, message=transformed_text)
+                            print(f"🚫 [STRIP MEDIA] Media stripped. Sent text-only message to {dest_channel_id}")
+                        elif override_image and custom_image_url:
                             await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
-                        elif event.media and not strip_media:
+                        elif event.media:
                             await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
                         else:
                             await client.send_message(entity=dest_entity, message=transformed_text)

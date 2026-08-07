@@ -78,6 +78,9 @@ class UpdateSettingsRequest(BaseModel):
     override_all_links: Optional[bool] = None
     custom_link_url: Optional[str] = None
     remove_all_links: Optional[bool] = None
+    override_media_image: Optional[bool] = None
+    custom_image_url: Optional[str] = None
+    strip_media_images: Optional[bool] = None
     keyword_filter: Optional[str] = None
     filter_mode: Optional[str] = None
     enabled: Optional[bool] = None
@@ -205,21 +208,24 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(title="Telegram Sync Hub VPS Backend API", lifespan=lifespan)
 
 # Enable CORS for Decoupled Frontend Deployment
+default_origins = [
+    "https://telegram.adshatke.site",
+    "http://telegram.adshatke.site",
+    "https://tg.adshatke.site",
+    "http://tg.adshatke.site",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
 cors_origins_env = os.getenv("CORS_ORIGINS", "")
 if cors_origins_env:
-    origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    env_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    origins = list(set(default_origins + env_origins))
 else:
-    origins = [
-        "https://telegram.adshatke.site",
-        "http://telegram.adshatke.site",
-        "https://tg.adshatke.site",
-        "http://tg.adshatke.site",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-    ]
+    origins = default_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -300,19 +306,11 @@ async def get_status(current_user: dict = Depends(get_current_user)):
     has_session = bool(profile.get("telegram_session_string"))
     session_expired = bool(profile.get("telegram_phone") and not has_session)
 
-    if profile.get("telegram_phone") or profile.get("telegram_first_name"):
-        tg_user = {
-            "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
-            "first_name": profile.get("telegram_first_name") or "Telegram User",
-            "username": profile.get("telegram_username") or "",
-            "phone": profile.get("telegram_phone") or ""
-        }
-        if has_session:
-            is_authorized = True
-
     if client:
         try:
-            if client.is_connected() and await client.is_user_authorized():
+            if not client.is_connected():
+                await client.connect()
+            if await client.is_user_authorized():
                 is_authorized = True
                 me = await client.get_me()
                 tg_user = {
@@ -323,6 +321,18 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                 }
         except Exception as e:
             print(f"Notice checking Telegram status for user {user_id}: {e}")
+
+    if profile.get("telegram_phone") or profile.get("telegram_first_name"):
+        if not tg_user:
+            tg_user = {
+                "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
+                "first_name": profile.get("telegram_first_name") or "Telegram User",
+                "username": profile.get("telegram_username") or "",
+                "phone": profile.get("telegram_phone") or ""
+            }
+
+    if has_session and not is_authorized:
+        session_expired = True
 
     settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
     stats = get_user_stats(user_id)
@@ -352,7 +362,7 @@ def check_user_has_paid_subscription(user_id: str):
     sub = get_user_subscription_from_db(user_id)
     if sub.get("status") != "active" or sub.get("plan_id") not in ["plan_599", "plan_799"]:
         raise HTTPException(
-            status_code=310,
+            status_code=402,
             detail="🔒 Subscription Required: Active Basic Plan (₹599) or Pro Plan (₹799) is required to connect your Telegram account."
         )
 
@@ -407,6 +417,8 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
         return {"success": False, "channels": [], "detail": "Telegram client not active for user."}
 
     try:
+        if not client.is_connected():
+            await client.connect()
         dialogs = await client.get_dialogs(limit=200)
         channels = []
         for d in dialogs:
@@ -475,7 +487,7 @@ async def get_messages(
     if channel_id and channel_id != "all":
         try:
             entity = await resolve_telegram_entity(client, channel_id)
-            chat_name = getattr(entity, "title", None) or getattr(entity, "first_name", "Channel")
+            channel_title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or f"Channel ({channel_id})"
 
             settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
 
@@ -487,23 +499,34 @@ async def get_messages(
                 raw_text = msg.text or msg.message or ""
                 transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
 
+                has_media = bool(msg.media)
+                media_type = "photo" if getattr(msg, "photo", None) else ("video" if getattr(msg, "video", None) else ("document" if getattr(msg, "document", None) else ("media" if msg.media else None)))
+
                 fetched_msgs.append({
                     "id": msg.id,
                     "chat_id": channel_id,
-                    "chat_name": chat_name,
+                    "chat_name": channel_title,
                     "raw_message": raw_text,
                     "transformed_message": transformed_text,
+                    "has_media": has_media,
+                    "media_type": media_type,
                     "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
                     "status": "synced" if should_forward else f"skipped ({reason})",
                     "telegram_posted": False
                 })
 
-            print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {chat_name}")
-            return {"success": True, "messages": fetched_msgs, "count": len(fetched_msgs)}
+            print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {channel_title}")
+            return {
+                "success": True,
+                "channel_id": str(channel_id),
+                "chat_name": channel_title,
+                "messages": fetched_msgs,
+                "count": len(fetched_msgs)
+            }
         except Exception as err:
             err_detail = f"Telegram error fetching channel {channel_id}: ({type(err).__name__}) {str(err)}"
             print(f"❌ {err_detail}")
-            return {"success": False, "messages": [], "error": str(err), "detail": err_detail}
+            return {"success": False, "channel_id": str(channel_id), "messages": [], "error": str(err), "detail": err_detail}
 
     # 2. Fallback to Supabase sync logs
     if IS_SUPABASE_CONFIGURED:
@@ -528,7 +551,13 @@ async def get_messages(
                 })
             print(f"[DEBUG] Messages received from DB logs: {len(formatted_logs)}")
             if formatted_logs:
-                return {"success": True, "messages": formatted_logs, "count": len(formatted_logs)}
+                return {
+                    "success": True,
+                    "channel_id": str(channel_id or "all"),
+                    "chat_name": "Sync Logs",
+                    "messages": formatted_logs,
+                    "count": len(formatted_logs)
+                }
 
     # 3. Fallback to in-memory messages
     messages = get_user_messages(user_id)
@@ -540,7 +569,13 @@ async def get_messages(
         ]
 
     print(f"[DEBUG] Messages received: {len(messages)}")
-    return {"success": True, "messages": messages, "count": len(messages)}
+    return {
+        "success": True,
+        "channel_id": str(channel_id or "all"),
+        "chat_name": "Local Cache",
+        "messages": messages,
+        "count": len(messages)
+    }
 
 
 @app.post("/api/settings")
@@ -611,13 +646,23 @@ async def get_subscription_status(current_user: dict = Depends(get_current_user)
 
 @app.post("/api/subscription/create-order")
 async def create_subscription_order(data: CreateRazorpayOrderRequest, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    print(f"[PAYMENT] Requested plan: {data.plan_id} for user: {user_id}")
+
     if data.plan_id not in PLANS_CONFIG:
+        print(f"[PAYMENT] Error response: Invalid plan_id '{data.plan_id}'")
         raise HTTPException(status_code=400, detail="Invalid plan selected.")
 
     plan = PLANS_CONFIG[data.plan_id]
+    mode = "LIVE" if RAZORPAY_KEY_ID.startswith("rzp_live_") else "TEST"
+    print(f"[PAYMENT] Amount: {plan['amount']} paise ({plan['currency']}) | Razorpay mode: {mode}")
 
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
-        raise HTTPException(status_code=500, detail="Razorpay credentials are not configured in backend environment variables.")
+        print("[PAYMENT] Error response: Razorpay credentials missing in environment variables.")
+        raise HTTPException(status_code=500, detail="Razorpay credentials (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) are not configured in backend environment variables.")
+
+    import time
+    receipt_id = f"sub_{user_id[:8]}_{int(time.time())}"
 
     try:
         url = "https://api.razorpay.com/v1/orders"
@@ -625,34 +670,50 @@ async def create_subscription_order(data: CreateRazorpayOrderRequest, current_us
         payload = {
             "amount": plan["amount"],
             "currency": plan["currency"],
-            "receipt": f"sub_{current_user['id'][:8]}_{int(asyncio.get_event_loop().time())}",
+            "receipt": receipt_id,
             "notes": {
-                "user_id": current_user["id"],
+                "user_id": user_id,
                 "plan_id": data.plan_id,
                 "plan_name": plan["name"]
             }
         }
-        res = requests.post(url, json=payload, auth=auth, timeout=10)
+
+        print(f"[PAYMENT] Calling Razorpay Orders API ({url}) with receipt: {receipt_id}...")
+        def _post():
+            return requests.post(url, json=payload, auth=auth, timeout=8)
+        res = await asyncio.to_thread(_post)
         res_data = res.json()
+        print(f"[PAYMENT] Order create response status {res.status_code}: {res_data}")
 
         if res.status_code != 200 or "id" not in res_data:
-            raise Exception(res_data.get("error", {}).get("description", "Failed to create Razorpay order."))
+            err_desc = res_data.get("error", {}).get("description") or res_data.get("detail") or str(res_data)
+            print(f"[PAYMENT] Error response from Razorpay API: {err_desc}")
+            raise HTTPException(status_code=400, detail=f"Razorpay Order Error: {err_desc}")
+
+        order_id = res_data["id"]
+        print(f"[PAYMENT] Razorpay order_id created successfully: {order_id}")
 
         return {
             "success": True,
-            "order_id": res_data["id"],
+            "order_id": order_id,
             "key_id": RAZORPAY_KEY_ID,
             "amount": plan["amount"],
             "currency": plan["currency"],
             "plan_name": plan["name"]
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[PAYMENT] Error response exception: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create payment order: {str(e)}")
 
 
 @app.post("/api/subscription/verify-payment")
 async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, current_user: dict = Depends(get_current_user)):
+    print(f"[PAYMENT] Verifying payment for order_id: {data.razorpay_order_id}, payment_id: {data.razorpay_payment_id}")
+
     if not RAZORPAY_KEY_SECRET:
+        print("[PAYMENT] Error response: RAZORPAY_KEY_SECRET is not configured.")
         raise HTTPException(status_code=500, detail="RAZORPAY_KEY_SECRET is not configured.")
 
     try:
@@ -664,8 +725,10 @@ async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, curren
         ).hexdigest()
 
         if expected_signature != data.razorpay_signature:
+            print("[PAYMENT] Error response: Signature verification failed!")
             raise HTTPException(status_code=400, detail="Invalid Razorpay payment signature! Payment verification failed.")
 
+        print("[PAYMENT] Signature verification succeeded. Activating subscription...")
         user_id = data.user_id or current_user["id"]
         plan = PLANS_CONFIG.get(data.plan_id, {"name": "Paid Plan", "price": 599})
 
@@ -680,6 +743,7 @@ async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, curren
         }
 
         saved_sub = update_user_subscription_in_db(user_id, sub_update)
+        print(f"[PAYMENT] Subscription activated successfully for user {user_id}: {saved_sub}")
 
         return {
             "success": True,
@@ -689,6 +753,7 @@ async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, curren
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
+        print(f"[PAYMENT] Error response exception during verification: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

@@ -81,6 +81,11 @@ export const authFetch = async (url, options = {}, isRetry = false) => {
 
     return res;
   } catch (err) {
+    if (!isRetry && (err.name === "TypeError" || err.message?.includes("Failed to fetch"))) {
+      console.warn(`[API] Network error fetching ${fullUrl}. Retrying in 1s...`);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return authFetch(url, options, true);
+    }
     console.error(`Fetch error for ${fullUrl}:`, err);
     throw err;
   }
