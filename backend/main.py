@@ -300,19 +300,11 @@ async def get_status(current_user: dict = Depends(get_current_user)):
     has_session = bool(profile.get("telegram_session_string"))
     session_expired = bool(profile.get("telegram_phone") and not has_session)
 
-    if profile.get("telegram_phone") or profile.get("telegram_first_name"):
-        tg_user = {
-            "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
-            "first_name": profile.get("telegram_first_name") or "Telegram User",
-            "username": profile.get("telegram_username") or "",
-            "phone": profile.get("telegram_phone") or ""
-        }
-        if has_session:
-            is_authorized = True
-
     if client:
         try:
-            if client.is_connected() and await client.is_user_authorized():
+            if not client.is_connected():
+                await client.connect()
+            if await client.is_user_authorized():
                 is_authorized = True
                 me = await client.get_me()
                 tg_user = {
@@ -323,6 +315,18 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                 }
         except Exception as e:
             print(f"Notice checking Telegram status for user {user_id}: {e}")
+
+    if profile.get("telegram_phone") or profile.get("telegram_first_name"):
+        if not tg_user:
+            tg_user = {
+                "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
+                "first_name": profile.get("telegram_first_name") or "Telegram User",
+                "username": profile.get("telegram_username") or "",
+                "phone": profile.get("telegram_phone") or ""
+            }
+
+    if has_session and not is_authorized:
+        session_expired = True
 
     settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
     stats = get_user_stats(user_id)
@@ -407,6 +411,8 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
         return {"success": False, "channels": [], "detail": "Telegram client not active for user."}
 
     try:
+        if not client.is_connected():
+            await client.connect()
         dialogs = await client.get_dialogs(limit=200)
         channels = []
         for d in dialogs:

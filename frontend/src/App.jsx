@@ -103,6 +103,8 @@ export default function App() {
       const data = await res.json();
       if (data.success && Array.isArray(data.channels)) {
         setChannels(data.channels);
+      } else {
+        console.warn("[fetchChannels] API returned non-success:", data.detail || data.error || "No channels available");
       }
     } catch (err) {
       console.error("Error fetching channels:", err);
@@ -116,7 +118,7 @@ export default function App() {
       const targetId = channelId !== undefined ? channelId : (activeSourceId || status?.settings?.source_channel_id || "all");
       if (channelId !== undefined && channelId !== null) setActiveSourceId(channelId);
 
-      if (!targetId || targetId === "all") {
+      if (!targetId) {
         console.info("[fetchSourceMessages] Skipped: No target channel ID specified.");
         return;
       }
@@ -180,7 +182,7 @@ export default function App() {
       await fetchChannels();
       const currentSrc = activeSourceId || status?.settings?.source_channel_id;
       const currentDest = activeDestId || status?.settings?.destination_channel_id;
-      if (currentSrc && currentSrc !== "all") await fetchSourceMessages(currentSrc);
+      if (currentSrc) await fetchSourceMessages(currentSrc);
       if (currentDest) await fetchDestinationMessages(currentDest);
     };
 
