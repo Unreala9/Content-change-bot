@@ -620,13 +620,23 @@ async def get_subscription_status(current_user: dict = Depends(get_current_user)
 
 @app.post("/api/subscription/create-order")
 async def create_subscription_order(data: CreateRazorpayOrderRequest, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    print(f"[PAYMENT] Requested plan: {data.plan_id} for user: {user_id}")
+
     if data.plan_id not in PLANS_CONFIG:
+        print(f"[PAYMENT] Error response: Invalid plan_id '{data.plan_id}'")
         raise HTTPException(status_code=400, detail="Invalid plan selected.")
 
     plan = PLANS_CONFIG[data.plan_id]
+    mode = "LIVE" if RAZORPAY_KEY_ID.startswith("rzp_live_") else "TEST"
+    print(f"[PAYMENT] Amount: {plan['amount']} paise ({plan['currency']}) | Razorpay mode: {mode}")
 
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
-        raise HTTPException(status_code=500, detail="Razorpay credentials are not configured in backend environment variables.")
+        print("[PAYMENT] Error response: Razorpay credentials missing in environment variables.")
+        raise HTTPException(status_code=500, detail="Razorpay credentials (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) are not configured in backend environment variables.")
+
+    import time
+    receipt_id = f"sub_{user_id[:8]}_{int(time.time())}"
 
     try:
         url = "https://api.razorpay.com/v1/orders"
@@ -634,34 +644,48 @@ async def create_subscription_order(data: CreateRazorpayOrderRequest, current_us
         payload = {
             "amount": plan["amount"],
             "currency": plan["currency"],
-            "receipt": f"sub_{current_user['id'][:8]}_{int(asyncio.get_event_loop().time())}",
+            "receipt": receipt_id,
             "notes": {
-                "user_id": current_user["id"],
+                "user_id": user_id,
                 "plan_id": data.plan_id,
                 "plan_name": plan["name"]
             }
         }
+
+        print(f"[PAYMENT] Calling Razorpay Orders API ({url}) with receipt: {receipt_id}...")
         res = requests.post(url, json=payload, auth=auth, timeout=10)
         res_data = res.json()
+        print(f"[PAYMENT] Order create response status {res.status_code}: {res_data}")
 
         if res.status_code != 200 or "id" not in res_data:
-            raise Exception(res_data.get("error", {}).get("description", "Failed to create Razorpay order."))
+            err_desc = res_data.get("error", {}).get("description") or res_data.get("detail") or str(res_data)
+            print(f"[PAYMENT] Error response from Razorpay API: {err_desc}")
+            raise HTTPException(status_code=400, detail=f"Razorpay Order Error: {err_desc}")
+
+        order_id = res_data["id"]
+        print(f"[PAYMENT] Razorpay order_id created successfully: {order_id}")
 
         return {
             "success": True,
-            "order_id": res_data["id"],
+            "order_id": order_id,
             "key_id": RAZORPAY_KEY_ID,
             "amount": plan["amount"],
             "currency": plan["currency"],
             "plan_name": plan["name"]
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[PAYMENT] Error response exception: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create payment order: {str(e)}")
 
 
 @app.post("/api/subscription/verify-payment")
 async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, current_user: dict = Depends(get_current_user)):
+    print(f"[PAYMENT] Verifying payment for order_id: {data.razorpay_order_id}, payment_id: {data.razorpay_payment_id}")
+
     if not RAZORPAY_KEY_SECRET:
+        print("[PAYMENT] Error response: RAZORPAY_KEY_SECRET is not configured.")
         raise HTTPException(status_code=500, detail="RAZORPAY_KEY_SECRET is not configured.")
 
     try:
@@ -673,8 +697,10 @@ async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, curren
         ).hexdigest()
 
         if expected_signature != data.razorpay_signature:
+            print("[PAYMENT] Error response: Signature verification failed!")
             raise HTTPException(status_code=400, detail="Invalid Razorpay payment signature! Payment verification failed.")
 
+        print("[PAYMENT] Signature verification succeeded. Activating subscription...")
         user_id = data.user_id or current_user["id"]
         plan = PLANS_CONFIG.get(data.plan_id, {"name": "Paid Plan", "price": 599})
 
@@ -689,6 +715,7 @@ async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, curren
         }
 
         saved_sub = update_user_subscription_in_db(user_id, sub_update)
+        print(f"[PAYMENT] Subscription activated successfully for user {user_id}: {saved_sub}")
 
         return {
             "success": True,
@@ -698,6 +725,7 @@ async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, curren
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
+        print(f"[PAYMENT] Error response exception during verification: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

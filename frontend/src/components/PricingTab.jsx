@@ -12,6 +12,7 @@ export default function PricingTab({ status, onRefresh, showToast }) {
 
   const handleSubscribe = async (planId) => {
     setLoadingPlan(planId);
+    console.info(`[PAYMENT] Requested plan: ${planId}`);
 
     try {
       // 1. Create order
@@ -21,12 +22,19 @@ export default function PricingTab({ status, onRefresh, showToast }) {
         body: JSON.stringify({ plan_id: planId })
       });
       const orderData = await orderRes.json();
+      console.info("[PAYMENT] Order create response:", orderData);
 
-      if (!orderRes.ok || !orderData.success) {
-        notify("Payment Order Error: " + (orderData.detail || "Could not initialize payment."), "error");
+      if (!orderRes.ok || !orderData.success || !orderData.order_id || !orderData.order_id.startsWith("order_")) {
+        console.error("[PAYMENT] Error response:", orderData);
+        notify("Payment Order Error: " + (orderData.detail || "Could not initialize payment order."), "error");
         setLoadingPlan(null);
         return;
       }
+
+      const mode = orderData.key_id?.startsWith("rzp_live_") ? "LIVE" : "TEST";
+      console.info(`[PAYMENT] Amount: ${orderData.amount} paise (${orderData.currency})`);
+      console.info(`[PAYMENT] Razorpay mode: ${mode}`);
+      console.info(`[PAYMENT] Razorpay order_id: ${orderData.order_id}`);
 
       // 2. Launch Razorpay Checkout modal
       const options = {
@@ -37,6 +45,7 @@ export default function PricingTab({ status, onRefresh, showToast }) {
         description: orderData.plan_name,
         order_id: orderData.order_id,
         handler: async function (response) {
+          console.info("[PAYMENT] Razorpay checkout callback response:", response);
           try {
             const verifyRes = await authFetch("/api/subscription/verify-payment", {
               method: "POST",
@@ -50,12 +59,15 @@ export default function PricingTab({ status, onRefresh, showToast }) {
             });
             const verifyData = await verifyRes.json();
             if (verifyData.success) {
+              console.info("[PAYMENT] Signature verification succeeded. Subscription activated:", verifyData);
               notify("🎉 Payment Verified! Plan activated successfully!", "success");
               onRefresh();
             } else {
+              console.error("[PAYMENT] Verification failed:", verifyData);
               notify("Payment Verification Error: " + verifyData.detail, "error");
             }
           } catch (e) {
+            console.error("[PAYMENT] Verification network error:", e);
             notify("Verification network error: " + e, "error");
           }
         },
@@ -64,13 +76,23 @@ export default function PricingTab({ status, onRefresh, showToast }) {
         }
       };
 
+      console.info("[PAYMENT] Checkout options:", {
+        key_id: options.key,
+        amount: options.amount,
+        currency: options.currency,
+        order_id: options.order_id,
+        plan: options.description
+      });
+
       if (window.Razorpay) {
         const rzp = new window.Razorpay(options);
         rzp.open();
       } else {
+        console.error("[PAYMENT] Error response: Razorpay Checkout SDK not loaded on window.");
         notify("Razorpay Checkout SDK not loaded.", "warning");
       }
     } catch (err) {
+      console.error("[PAYMENT] Subscription Error:", err);
       notify("Subscription Error: " + err, "error");
     } finally {
       setLoadingPlan(null);
