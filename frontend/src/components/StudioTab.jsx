@@ -147,8 +147,19 @@ export default function StudioTab({
     });
   };
 
-  const selectedSource = channels.find(c => String(c.id) === String(sourceChannel));
-  const selectedDest = channels.find(c => String(c.id) === String(destChannel));
+  const isChannelMatch = (idA, idB) => {
+    if (!idA || !idB) return false;
+    if (String(idA) === String(idB)) return true;
+    const cleanA = String(idA).replace("-100", "").replace("-", "").trim();
+    const cleanB = String(idB).replace("-100", "").replace("-", "").trim();
+    return cleanA === cleanB;
+  };
+
+  const selectedSource = channels.find(c => isChannelMatch(c.id, sourceChannel));
+  const selectedDest = channels.find(c => isChannelMatch(c.id, destChannel));
+
+  const effectiveSourceValue = selectedSource ? selectedSource.id : sourceChannel;
+  const effectiveDestValue = selectedDest ? selectedDest.id : destChannel;
 
   const formatChannelBadge = (chId) => {
     if (!chId || chId === "all") return "Global Extract";
@@ -181,7 +192,7 @@ export default function StudioTab({
           <select
             className="form-select"
             style={{ width: "100%", height: "38px", background: "rgba(0, 0, 0, 0.5)", border: "1px solid var(--border-color)", fontWeight: "600", fontSize: "13px" }}
-            value={sourceChannel}
+            value={effectiveSourceValue}
             onChange={(e) => {
               const val = e.target.value;
               setSourceChannel(val);
@@ -199,6 +210,11 @@ export default function StudioTab({
             }}
           >
             <option value="all">⚡ All Incoming Chats (Global Extract)</option>
+            {effectiveSourceValue && effectiveSourceValue !== "all" && !channels.some((ch) => isChannelMatch(ch.id, effectiveSourceValue)) && (
+              <option value={effectiveSourceValue}>
+                Selected Channel ({effectiveSourceValue})
+              </option>
+            )}
             {channels.map((ch, idx) => (
               <option key={`src-opt-${ch.id}-${idx}`} value={ch.id}>
                 {ch.name} ({ch.type === "channel" ? "Channel" : ch.type})
@@ -271,7 +287,7 @@ export default function StudioTab({
             <select
               className="form-select"
               style={{ width: "100%", height: "38px", background: "rgba(0, 0, 0, 0.5)", border: "1px solid var(--border-color)", fontWeight: "600", fontSize: "13px" }}
-              value={destChannel}
+              value={effectiveDestValue}
               onChange={(e) => {
                 const val = e.target.value;
                 setDestChannel(val);
@@ -288,6 +304,11 @@ export default function StudioTab({
               }}
             >
               <option value="">-- Select Destination Channel --</option>
+              {effectiveDestValue && !channels.some((ch) => isChannelMatch(ch.id, effectiveDestValue)) && (
+                <option value={effectiveDestValue}>
+                  Selected Destination ({effectiveDestValue})
+                </option>
+              )}
               {channels.map((ch, idx) => (
                 <option key={`dest-opt-${ch.id}-${idx}`} value={ch.id}>
                   {ch.name} ({ch.type === "channel" ? "Channel" : ch.type})

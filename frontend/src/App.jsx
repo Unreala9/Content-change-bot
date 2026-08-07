@@ -210,13 +210,15 @@ export default function App() {
       if (res.ok && data.success) {
         console.info("[saveSettings] Save successful:", data.settings);
         showToast("Engine Settings & Rules Saved Successfully!", "success");
-        fetchStatus();
         if (payload.source_channel_id) {
+          setActiveSourceId(payload.source_channel_id);
           fetchSourceMessages(payload.source_channel_id);
         }
         if (payload.destination_channel_id) {
+          setActiveDestId(payload.destination_channel_id);
           fetchDestinationMessages(payload.destination_channel_id);
         }
+        fetchStatus();
       } else {
         console.error("[saveSettings] Save failed:", data.detail || data.error);
         showToast("Error saving settings: " + (data.detail || "Failed"), "error");

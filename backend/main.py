@@ -484,7 +484,7 @@ async def get_messages(
     if channel_id and channel_id != "all":
         try:
             entity = await resolve_telegram_entity(client, channel_id)
-            chat_name = getattr(entity, "title", None) or getattr(entity, "first_name", "Channel")
+            channel_title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or f"Channel ({channel_id})"
 
             settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
 
@@ -499,7 +499,7 @@ async def get_messages(
                 fetched_msgs.append({
                     "id": msg.id,
                     "chat_id": channel_id,
-                    "chat_name": chat_name,
+                    "chat_name": channel_title,
                     "raw_message": raw_text,
                     "transformed_message": transformed_text,
                     "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
@@ -507,7 +507,7 @@ async def get_messages(
                     "telegram_posted": False
                 })
 
-            print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {chat_name}")
+            print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {channel_title}")
             return {"success": True, "messages": fetched_msgs, "count": len(fetched_msgs)}
         except Exception as err:
             err_detail = f"Telegram error fetching channel {channel_id}: ({type(err).__name__}) {str(err)}"
