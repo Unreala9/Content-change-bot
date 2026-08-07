@@ -11,6 +11,7 @@ import RulesTab from "./components/RulesTab";
 import FeedTab from "./components/FeedTab";
 import PricingTab from "./components/PricingTab";
 import AuthModal from "./components/AuthModal";
+import LoginPage from "./components/LoginPage";
 import Toast from "./components/Toast";
 
 export default function App() {

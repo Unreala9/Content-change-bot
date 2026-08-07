@@ -5,7 +5,7 @@ import asyncio
 from typing import Optional, List, Dict, Any
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -210,11 +210,15 @@ if cors_origins_env:
     origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
 else:
     origins = [
+        "https://telegram.adshatke.site",
+        "http://telegram.adshatke.site",
+        "https://tg.adshatke.site",
+        "http://tg.adshatke.site",
         "http://localhost:5173",
         "http://localhost:5174",
+        "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
-        "https://tg.adshatke.site"
     ]
 
 app.add_middleware(
@@ -222,8 +226,23 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def log_cors_and_requests(request: Request, call_next):
+    origin = request.headers.get("origin", "N/A")
+    method = request.method
+    path = request.url.path
+
+    if method == "OPTIONS":
+        response = await call_next(request)
+        print(f"[CORS PREFLIGHT] Method: {method} | Path: {path} | Origin: {origin} | Status: {response.status_code}")
+        return response
+
+    response = await call_next(request)
+    print(f"[HTTP REQUEST] Method: {method} | Path: {path} | Origin: {origin} | Status: {response.status_code}")
+    return response
 
 
 @app.get("/")
