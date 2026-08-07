@@ -205,21 +205,24 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(title="Telegram Sync Hub VPS Backend API", lifespan=lifespan)
 
 # Enable CORS for Decoupled Frontend Deployment
+default_origins = [
+    "https://telegram.adshatke.site",
+    "http://telegram.adshatke.site",
+    "https://tg.adshatke.site",
+    "http://tg.adshatke.site",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
 cors_origins_env = os.getenv("CORS_ORIGINS", "")
 if cors_origins_env:
-    origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    env_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    origins = list(set(default_origins + env_origins))
 else:
-    origins = [
-        "https://telegram.adshatke.site",
-        "http://telegram.adshatke.site",
-        "https://tg.adshatke.site",
-        "http://tg.adshatke.site",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-    ]
+    origins = default_origins
 
 app.add_middleware(
     CORSMiddleware,

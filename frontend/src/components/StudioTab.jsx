@@ -195,8 +195,8 @@ export default function StudioTab({
             }}
           >
             <option value="all">⚡ All Incoming Chats (Global Extract)</option>
-            {channels.map((ch) => (
-              <option key={ch.id} value={ch.id}>
+            {channels.map((ch, idx) => (
+              <option key={`src-opt-${ch.id}-${idx}`} value={ch.id}>
                 {ch.name} ({ch.type === "channel" ? "Channel" : ch.type})
               </option>
             ))}
@@ -284,8 +284,8 @@ export default function StudioTab({
               }}
             >
               <option value="">-- Select Destination Channel --</option>
-              {channels.map((ch) => (
-                <option key={ch.id} value={ch.id}>
+              {channels.map((ch, idx) => (
+                <option key={`dest-opt-${ch.id}-${idx}`} value={ch.id}>
                   {ch.name} ({ch.type === "channel" ? "Channel" : ch.type})
                 </option>
               ))}
@@ -411,7 +411,7 @@ export default function StudioTab({
                 {sourceMessages.map((m, idx) => (
                   <div
                     className="msg-card"
-                    key={m.id || idx}
+                    key={`src-msg-${m.chat_id || 'all'}-${m.id || idx}-${idx}`}
                     style={{
                       background: "rgba(13, 18, 31, 0.8)",
                       border: "1px solid var(--border-color)",
@@ -733,7 +733,7 @@ export default function StudioTab({
                 {destinationMessages.map((m, idx) => (
                   <div
                     className="msg-card"
-                    key={m.id || idx}
+                    key={`dest-msg-${m.chat_id || 'dest'}-${m.id || idx}-${idx}`}
                     style={{
                       background: "rgba(13, 18, 31, 0.8)",
                       border: "1px solid var(--border-color)",

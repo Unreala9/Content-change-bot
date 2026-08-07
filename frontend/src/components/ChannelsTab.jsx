@@ -51,9 +51,9 @@ export default function ChannelsTab({ channels, onFetchChannels }) {
                 <p>No Telegram dialogs found matching your filter.</p>
               </div>
             ) : (
-              filtered.map((chat) => (
+              filtered.map((chat, idx) => (
                 <div
-                  key={chat.id}
+                  key={`ch-card-${chat.id}-${idx}`}
                   style={{
                     background: "rgba(0, 0, 0, 0.3)",
                     border: "1px solid var(--border-color)",
