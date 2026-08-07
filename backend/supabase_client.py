@@ -237,7 +237,8 @@ def save_user_settings_to_db(user_id: str, settings_update: dict) -> dict:
             "id", "user_id", "webhook_url", "source_channel_id", "destination_channel_id",
             "auto_post_telegram", "auto_post_n8n", "text_prefix", "text_suffix",
             "find_text", "replace_text", "replacement_rules", "override_all_links",
-            "custom_link_url", "remove_all_links", "keyword_filter", "filter_mode",
+            "custom_link_url", "remove_all_links", "override_media_image", "custom_image_url",
+            "strip_media_images", "keyword_filter", "filter_mode",
             "enabled", "created_at", "updated_at"
         }
         clean_row = {k: v for k, v in existing.items() if k in valid_cols}

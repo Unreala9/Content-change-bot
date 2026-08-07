@@ -463,6 +463,12 @@ export default function StudioTab({
 
                     <div className="msg-body" style={{ fontSize: "13px", fontWeight: "600", color: "#ffffff", margin: "8px 0", lineHeight: "1.4" }}>
                       {m.raw_message}
+                      {m.has_media && (
+                        <div style={{ marginTop: "6px", display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(59, 130, 246, 0.15)", color: "#60a5fa", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "6px", padding: "2px 8px", fontSize: "11px" }}>
+                          <i className={m.media_type === "video" ? "fa-solid fa-video" : (m.media_type === "photo" ? "fa-solid fa-image" : "fa-solid fa-paperclip")}></i>
+                          <span>{m.media_type ? m.media_type.toUpperCase() : "MEDIA ATTACHMENT"}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>

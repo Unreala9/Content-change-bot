@@ -78,6 +78,9 @@ class UpdateSettingsRequest(BaseModel):
     override_all_links: Optional[bool] = None
     custom_link_url: Optional[str] = None
     remove_all_links: Optional[bool] = None
+    override_media_image: Optional[bool] = None
+    custom_image_url: Optional[str] = None
+    strip_media_images: Optional[bool] = None
     keyword_filter: Optional[str] = None
     filter_mode: Optional[str] = None
     enabled: Optional[bool] = None
@@ -496,12 +499,17 @@ async def get_messages(
                 raw_text = msg.text or msg.message or ""
                 transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
 
+                has_media = bool(msg.media)
+                media_type = "photo" if getattr(msg, "photo", None) else ("video" if getattr(msg, "video", None) else ("document" if getattr(msg, "document", None) else ("media" if msg.media else None)))
+
                 fetched_msgs.append({
                     "id": msg.id,
                     "chat_id": channel_id,
                     "chat_name": channel_title,
                     "raw_message": raw_text,
                     "transformed_message": transformed_text,
+                    "has_media": has_media,
+                    "media_type": media_type,
                     "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
                     "status": "synced" if should_forward else f"skipped ({reason})",
                     "telegram_posted": False
