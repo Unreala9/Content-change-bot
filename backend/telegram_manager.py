@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 import requests
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, AuthKeyDuplicatedError, AuthKeyUnregisteredError
 
 from config import API_ID, API_HASH, SESSION_NAME, load_settings
 from supabase_client import (
@@ -22,6 +22,21 @@ from supabase_client import (
 # In-memory per-user recent message history (max 100 per user)
 user_recent_messages: Dict[str, deque] = {}
 user_stats: Dict[str, Dict[str, int]] = {}
+user_settings_cache: Dict[str, dict] = {}
+
+
+def get_cached_settings(user_id: str) -> dict:
+    if user_id in user_settings_cache:
+        return user_settings_cache[user_id]
+    settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
+    user_settings_cache[user_id] = settings
+    return settings
+
+
+def update_settings_cache(user_id: str, new_settings: dict):
+    if user_id not in user_settings_cache:
+        user_settings_cache[user_id] = {}
+    user_settings_cache[user_id].update(new_settings)
 
 
 def get_user_stats(user_id: str) -> Dict[str, int]:
@@ -57,18 +72,7 @@ class MultiUserTelegramManager:
     async def start(self):
         print("🚀 Starting Telegram Sync Hub...")
         if IS_SUPABASE_CONFIGURED:
-            print("⚡ Initializing Multi-User Telegram Manager...")
-            users_with_sessions = get_all_users_with_telegram_sessions()
-            print(f"🔍 Found {len(users_with_sessions)} active Telegram sessions in Supabase.")
-            for user in users_with_sessions:
-                user_id = user.get("id")
-                session_str = user.get("telegram_session_string")
-                email = user.get("email", user_id)
-                if session_str:
-                    try:
-                        await self.start_user_session(user_id, session_str, email)
-                    except Exception as e:
-                        print(f"⚠️ Could not start Telegram session for User ({email}): {e}")
+            await self.initialize_all_active_sessions()
         else:
             print("💡 Supabase not configured. Operating in Single-User Local Session Mode.")
             self.local_fallback_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
@@ -78,6 +82,30 @@ class MultiUserTelegramManager:
                 print("✅ Local Telegram Client started successfully!")
             except Exception as e:
                 print(f"⚠️ Local Telegram client start notice: {e}")
+
+    async def initialize_all_active_sessions(self):
+        if not IS_SUPABASE_CONFIGURED:
+            print("ℹ️ Local Mode: Initializing single fallback Telegram Client...")
+            self.local_fallback_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+            try:
+                await self.local_fallback_client.connect()
+                print("⚡ Local Telegram Client connected.")
+            except Exception as e:
+                print(f"⚠️ Local Telegram client start notice: {e}")
+            return
+
+        print("⚡ Initializing Multi-User Telegram Manager...")
+        users = get_all_users_with_telegram_sessions()
+        print(f"🔍 Found {len(users)} active Telegram sessions in Supabase.")
+
+        for u in users:
+            uid = u["id"]
+            s_str = u.get("telegram_session_string")
+            if s_str:
+                try:
+                    await self.start_user_session(uid, s_str, u.get("email", uid))
+                except Exception as e:
+                    print(f"⚠️ Could not start Telegram session for User ({u.get('email', uid)}): {e}")
 
     async def stop(self):
         print("🔌 Stopping all active Telegram Client sessions...")
@@ -97,18 +125,36 @@ class MultiUserTelegramManager:
         if user_id in self.active_clients and self.active_clients[user_id].is_connected():
             return self.active_clients[user_id]
 
-        client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-        await client.connect()
+        try:
+            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+            await client.connect()
 
-        if not await client.is_user_authorized():
-            print(f"⚠️ StringSession for user {identifier or user_id} is no longer authorized.")
-            await client.disconnect()
+            if not await client.is_user_authorized():
+                print(f"⚠️ StringSession for user {identifier or user_id} is no longer authorized.")
+                await client.disconnect()
+                if IS_SUPABASE_CONFIGURED:
+                    update_user_profile_in_db(user_id, {"telegram_session_string": ""})
+                return None
+
+            # Warm up internal Telethon entity cache for instant 0ms channel resolution
+            try:
+                await client.get_dialogs(limit=100)
+                print(f"⚡ Entity cache warmed up for User: {identifier or user_id}")
+            except Exception as cache_err:
+                print(f"⚠️ Notice warming dialogs cache: {cache_err}")
+
+            self._attach_listener(user_id, client)
+            self.active_clients[user_id] = client
+            print(f"✅ Active Telegram client started for User: {identifier or user_id}")
+            return client
+        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError) as e:
+            print(f"⚠️ Telegram Session revoked/invalidated for user {identifier or user_id}: {e}")
+            if IS_SUPABASE_CONFIGURED:
+                update_user_profile_in_db(user_id, {"telegram_session_string": ""})
             return None
-
-        self._attach_listener(user_id, client)
-        self.active_clients[user_id] = client
-        print(f"✅ Active Telegram client started for User: {identifier or user_id}")
-        return client
+        except Exception as e:
+            print(f"⚠️ Error starting Telegram session for user {identifier or user_id}: {e}")
+            return None
 
     def _attach_listener(self, user_id: str, client: TelegramClient):
         @client.on(events.NewMessage)
@@ -116,20 +162,22 @@ class MultiUserTelegramManager:
             stats = get_user_stats(user_id)
             stats["received"] += 1
 
-            settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
+            settings = get_cached_settings(user_id)
 
             if not settings.get("enabled", True):
                 return
 
             try:
-                chat = await event.get_chat()
-                chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", "Unknown")
+                chat_name = getattr(event.chat, "title", None) or getattr(event.chat, "first_name", "Chat")
                 raw_text = event.raw_text or ""
 
                 # Filter by Source Channel
                 configured_source = str(settings.get("source_channel_id", "all")).strip()
-                if configured_source and configured_source != "all" and str(event.chat_id) != configured_source:
-                    return
+                if configured_source and configured_source != "all":
+                    clean_event_chat = str(event.chat_id).replace("-100", "").replace("-", "")
+                    clean_config_source = configured_source.replace("-100", "").replace("-", "")
+                    if clean_event_chat != clean_config_source:
+                        return
 
                 # Import dynamic text transform function
                 from main import apply_text_transformation
@@ -152,24 +200,49 @@ class MultiUserTelegramManager:
                 if not should_forward:
                     stats["filtered"] += 1
                     log_item["status"] = "skipped"
-                    add_user_message_log(user_id, log_item)
+                    asyncio.create_task(asyncio.to_thread(add_user_message_log, user_id, log_item))
                     print(f"⏩ [Filtered User:{user_id[:8]}] Chat: {chat_name} | Reason: {reason}")
                     return
 
-                # 1. Direct Telegram Auto-Posting to Destination Channel
+                # 1. Direct Telegram Auto-Posting to Destination Channel (INSTANT HIGH PRIORITY)
                 auto_post_telegram = settings.get("auto_post_telegram", False)
                 dest_channel_id = str(settings.get("destination_channel_id", "")).strip()
 
                 if auto_post_telegram and dest_channel_id:
                     try:
                         target_dest = int(dest_channel_id) if (dest_channel_id.isdigit() or dest_channel_id.startswith("-")) else dest_channel_id
-                        dest_entity = await client.get_entity(target_dest)
-                        await client.send_message(entity=dest_entity, message=transformed_text)
+                        try:
+                            dest_entity = await client.get_entity(target_dest)
+                        except Exception:
+                            dialogs = await client.get_dialogs(limit=200)
+                            clean_target = str(dest_channel_id).replace("-100", "").replace("-", "")
+                            dest_entity = None
+                            for d in dialogs:
+                                if str(d.id).replace("-100", "").replace("-", "") == clean_target:
+                                    dest_entity = d.entity
+                                    break
+                            if not dest_entity:
+                                raise
+
+                        override_image = settings.get("override_media_image", False)
+                        custom_image_url = settings.get("custom_image_url", "").strip()
+                        strip_media = settings.get("strip_media_images", False)
+
+                        if override_image and custom_image_url:
+                            await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
+                        elif event.media and not strip_media:
+                            await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
+                        else:
+                            await client.send_message(entity=dest_entity, message=transformed_text)
+
                         log_item["telegram_posted"] = True
-                        print(f"✈️ [User:{user_id[:8]}] Auto-posted message directly to Telegram ({dest_channel_id})")
+                        print(f"⚡ [INSTANT RELAY User:{user_id[:8]}] Posted to Telegram destination ({dest_channel_id})")
                     except Exception as tg_err:
                         print(f"⚠️ [User:{user_id[:8]}] Telegram auto-post error: {tg_err}")
                         log_item["telegram_error"] = str(tg_err)
+
+                # Save log asynchronously without blocking the main event loop
+                asyncio.create_task(asyncio.to_thread(add_user_message_log, user_id, log_item))
 
                 # 2. n8n Webhook Forwarding
                 auto_post_n8n = settings.get("auto_post_n8n", True)
@@ -281,10 +354,11 @@ class MultiUserTelegramManager:
                     "telegram_first_name": me.first_name,
                     "telegram_username": me.username or ""
                 })
-                self._attach_listener(user_id, client)
-                self.active_clients[user_id] = client
-                if user_id in self.pending_logins:
-                    del self.pending_logins[user_id]
+
+            self._attach_listener(user_id, client)
+            self.active_clients[user_id] = client
+            if user_id in self.pending_logins:
+                del self.pending_logins[user_id]
 
             return {
                 "success": True,

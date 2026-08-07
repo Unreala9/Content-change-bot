@@ -24,6 +24,13 @@ from config import (
 )
 
 
+import logging
+
+# Configure logger for authentication module
+logger = logging.getLogger("auth")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
+
 # Initialize Supabase Python Client if configured
 supabase = None
 if IS_SUPABASE_CONFIGURED:
@@ -41,47 +48,87 @@ security = HTTPBearer(auto_error=False)
 async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Security(security)) -> Dict[str, Any]:
     """
     FastAPI dependency to verify Supabase JWT token from Authorization header.
+    Requires 'Bearer <token>' scheme.
     If Supabase is not configured, returns local default user context.
     """
     if not IS_SUPABASE_CONFIGURED or not supabase:
         return {"id": "00000000-0000-0000-0000-000000000000", "email": "local@user.com", "is_local": True}
 
     if not credentials or not credentials.credentials:
+        logger.warning("Missing Authorization header")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authentication Token. Please sign in via Supabase Auth.",
+            detail="Missing Authorization header. Please include 'Authorization: Bearer <access_token>'.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = credentials.credentials
+    if credentials.scheme.lower() != "bearer":
+        logger.warning("Invalid authorization scheme")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization scheme. Must be 'Bearer'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
+    token = credentials.credentials.strip()
+    if not token:
+        logger.warning("Missing Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Empty access token provided.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # 1. Primary Verification: Supabase API get_user(token)
     try:
-        # 1. Try decoding with Supabase Auth service
         user_res = supabase.auth.get_user(token)
         if user_res and user_res.user:
+            user_id = str(user_res.user.id)
+            email = user_res.user.email or ""
+            logger.info("Authenticated user: %s", user_id)
             return {
-                "id": str(user_res.user.id),
-                "email": user_res.user.email,
+                "id": user_id,
+                "email": email,
                 "is_local": False
             }
-    except Exception as e:
-        # 2. Fallback to PyJWT token decoding if secret is available
-        if SUPABASE_JWT_SECRET:
+    except Exception as api_err:
+        logger.warning("JWT verification failed: %s", api_err)
+
+    # 2. Secondary Verification: PyJWT local verification with SUPABASE_JWT_SECRET
+    if SUPABASE_JWT_SECRET:
+        secrets_to_try = [SUPABASE_JWT_SECRET]
+        try:
+            import base64
+            decoded_b64 = base64.b64decode(SUPABASE_JWT_SECRET)
+            secrets_to_try.append(decoded_b64)
+        except Exception:
+            pass
+
+        for secret in secrets_to_try:
             try:
-                payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+                payload = jwt.decode(
+                    token,
+                    secret,
+                    algorithms=["HS256"],
+                    options={"verify_aud": False}
+                )
                 user_id = payload.get("sub")
                 email = payload.get("email", "")
                 if user_id:
-                    return {"id": user_id, "email": email, "is_local": False}
-            except Exception as jwt_err:
-                print(f"JWT Decode error: {jwt_err}")
+                    logger.info("Authenticated user: %s", user_id)
+                    return {"id": str(user_id), "email": email, "is_local": False}
+            except jwt.ExpiredSignatureError:
+                logger.warning("JWT expired")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="JWT token has expired. Please sign in again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            except jwt.InvalidTokenError as jwt_err:
+                logger.warning("JWT verification failed: %s", jwt_err)
 
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired Supabase authentication token: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+    token_prefix = token[:10] if len(token) >= 10 else "short_token"
+    logger.warning("JWT verification failed for token prefix: %s...", token_prefix)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not authenticate user token with Supabase.",
@@ -130,11 +177,16 @@ def sign_in_user(email: str, password: str) -> dict:
                 "success": True,
                 "message": "Signed in successfully!",
                 "user": {"id": str(res.user.id), "email": res.user.email},
-                "access_token": res.session.access_token
+                "access_token": res.session.access_token,
+                "refresh_token": res.session.refresh_token,
+                "expires_in": res.session.expires_in if hasattr(res.session, "expires_in") else 3600
             }
-        raise Exception("Invalid email or password.")
+        raise Exception("Invalid credentials or no active session returned.")
     except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        detail_msg = str(e)
+        if "Invalid login credentials" in detail_msg:
+            detail_msg = "Invalid email or password."
+        raise HTTPException(status_code=401, detail=detail_msg)
 
 
 # --- Supabase Database Helper Functions ---
@@ -168,16 +220,35 @@ def save_user_settings_to_db(user_id: str, settings_update: dict) -> dict:
         return save_settings(settings_update)
 
     try:
-        # Check if settings exist
         existing = get_user_settings_from_db(user_id)
-        existing.update(settings_update)
+        
+        # Merge settings update safely into existing settings
+        for k, v in settings_update.items():
+            if v is not None:
+                # Do not overwrite existing non-empty channel ID with empty string unless explicitly cleared
+                if k in ["source_channel_id", "destination_channel_id"] and str(v).strip() == "" and existing.get(k):
+                    continue
+                existing[k] = v
+
         existing["user_id"] = user_id
 
-        res = supabase.table("user_settings").upsert(existing).execute()
-        if res.data:
-            return res.data[0]
+        # Sanitize keys to match exact Supabase user_settings schema columns
+        valid_cols = {
+            "id", "user_id", "webhook_url", "source_channel_id", "destination_channel_id",
+            "auto_post_telegram", "auto_post_n8n", "text_prefix", "text_suffix",
+            "find_text", "replace_text", "replacement_rules", "override_all_links",
+            "custom_link_url", "remove_all_links", "keyword_filter", "filter_mode",
+            "enabled", "created_at", "updated_at"
+        }
+        clean_row = {k: v for k, v in existing.items() if k in valid_cols}
+
+        res = supabase.table("user_settings").upsert(clean_row).execute()
+        if res.data and len(res.data) > 0:
+            saved_row = res.data[0]
+            print(f"✅ [DB SAVE SUCCESS] user_settings saved for {user_id[:8]}: source={saved_row.get('source_channel_id')}, dest={saved_row.get('destination_channel_id')}")
+            return saved_row
     except Exception as e:
-        print(f"Error saving user_settings to Supabase for {user_id}: {e}")
+        print(f"❌ Error saving user_settings to Supabase for {user_id}: {e}")
 
     return settings_update
 
@@ -292,12 +363,35 @@ def get_user_subscription_from_db(user_id: str) -> dict:
     try:
         res = supabase.table("subscriptions").select("*").eq("user_id", user_id).execute()
         if res.data and len(res.data) > 0:
-            return res.data[0]
-        else:
-            # Create default free subscription record
-            inserted = supabase.table("subscriptions").insert(default_sub).execute()
-            if inserted.data:
-                return inserted.data[0]
+            sub = res.data[0]
+            plan_id = str(sub.get("plan_id", "")).lower()
+            if "799" in plan_id or "pro" in plan_id:
+                sub["plan_name"] = "Pro Plan (₹799)"
+            elif "599" in plan_id or "basic" in plan_id:
+                sub["plan_name"] = "Basic Plan (₹599)"
+            elif not sub.get("plan_name"):
+                sub["plan_name"] = "Active Plan"
+            return sub
+
+        # Fallback check in profiles table
+        prof_res = supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if prof_res.data and len(prof_res.data) > 0:
+            p = prof_res.data[0]
+            p_plan = str(p.get("plan_id") or p.get("subscription_plan") or p.get("plan") or "").lower()
+            if p_plan and p_plan not in ["free", "none", ""]:
+                p_name = "Pro Plan (₹799)" if ("799" in p_plan or "pro" in p_plan) else "Basic Plan (₹599)"
+                return {
+                    "user_id": user_id,
+                    "plan_id": p_plan,
+                    "plan_name": p_name,
+                    "amount_paid": 799 if ("799" in p_plan or "pro" in p_plan) else 599,
+                    "status": "active"
+                }
+
+        # Create default free subscription record
+        inserted = supabase.table("subscriptions").insert(default_sub).execute()
+        if inserted.data:
+            return inserted.data[0]
     except Exception as e:
         print(f"Error reading subscription from Supabase for {user_id}: {e}")
 

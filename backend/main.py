@@ -154,8 +154,9 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
             if isinstance(rule, dict):
                 find_val = rule.get("find", "")
                 replace_val = rule.get("replace", "")
-                if find_val:
-                    transformed = transformed.replace(find_val, replace_val)
+                if find_val and find_val.strip():
+                    pattern = re.compile(re.escape(find_val.strip()), re.IGNORECASE)
+                    transformed = pattern.sub(replace_val, transformed)
 
     # 2. Quick Comma-Separated Replacement Mode (Fallback)
     find_str = settings.get("find_text", "").strip()
@@ -167,10 +168,11 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
 
         for i, target in enumerate(find_list):
             rep = replace_list[i] if i < len(replace_list) else (replace_list[-1] if replace_list else "")
-            transformed = transformed.replace(target, rep)
+            pattern = re.compile(re.escape(target), re.IGNORECASE)
+            transformed = pattern.sub(rep, transformed)
 
     # 3. Link Handling Engine
-    url_pattern = r'https?://[^\s]+'
+    url_pattern = r'(https?://[^\s]+|www\.[^\s]+|t\.me/[^\s]+)'
 
     if settings.get("remove_all_links", False):
         transformed = re.sub(url_pattern, '', transformed)
@@ -203,12 +205,24 @@ async def lifespan(app_instance: FastAPI):
 app = FastAPI(title="Telegram Sync Hub VPS Backend API", lifespan=lifespan)
 
 # Enable CORS for Decoupled Frontend Deployment
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+if cors_origins_env:
+    origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+else:
+    origins = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "https://tg.adshatke.site"
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -218,6 +232,15 @@ async def root():
         "status": "online",
         "service": "Telegram Sync Hub VPS Backend API",
         "docs": "/docs"
+    }
+
+
+@app.get("/api/auth/debug")
+async def auth_debug(current_user: dict = Depends(get_current_user)):
+    return {
+        "authenticated": True,
+        "user_id": current_user.get("id"),
+        "email": current_user.get("email"),
     }
 
 
@@ -249,10 +272,24 @@ async def get_user_me(current_user: dict = Depends(get_current_user)):
 @app.get("/api/status")
 async def get_status(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
+    profile = get_user_profile_from_db(user_id) if IS_SUPABASE_CONFIGURED else {}
     client = await telegram_manager.get_client_for_user(user_id)
 
     is_authorized = False
     tg_user = None
+
+    has_session = bool(profile.get("telegram_session_string"))
+    session_expired = bool(profile.get("telegram_phone") and not has_session)
+
+    if profile.get("telegram_phone") or profile.get("telegram_first_name"):
+        tg_user = {
+            "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
+            "first_name": profile.get("telegram_first_name") or "Telegram User",
+            "username": profile.get("telegram_username") or "",
+            "phone": profile.get("telegram_phone") or ""
+        }
+        if has_session:
+            is_authorized = True
 
     if client:
         try:
@@ -261,20 +298,24 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                 me = await client.get_me()
                 tg_user = {
                     "id": me.id,
-                    "first_name": me.first_name,
-                    "username": me.username or "",
-                    "phone": me.phone or ""
+                    "first_name": me.first_name or profile.get("telegram_first_name") or "Telegram User",
+                    "username": me.username or profile.get("telegram_username") or "",
+                    "phone": me.phone or profile.get("telegram_phone") or ""
                 }
         except Exception as e:
-            print(f"Error checking status for user {user_id}: {e}")
+            print(f"Notice checking Telegram status for user {user_id}: {e}")
 
     settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
     stats = get_user_stats(user_id)
     subscription = get_user_subscription_from_db(user_id)
 
+    print(f"[DEBUG] Configuration loaded: source_channel_id={settings.get('source_channel_id')}, destination_channel_id={settings.get('destination_channel_id')}, auto_post={settings.get('auto_post_telegram')}")
+    print(f"[DEBUG] Telegram client connected: {bool(client and client.is_connected())}, authorized: {is_authorized}")
+
     return {
-        "connected": bool(client and client.is_connected()),
+        "connected": is_authorized or has_session,
         "authorized": is_authorized,
+        "session_expired": session_expired,
         "user": tg_user,
         "account": current_user,
         "stats": stats,
@@ -292,7 +333,7 @@ def check_user_has_paid_subscription(user_id: str):
     sub = get_user_subscription_from_db(user_id)
     if sub.get("status") != "active" or sub.get("plan_id") not in ["plan_599", "plan_799"]:
         raise HTTPException(
-            status_code=403,
+            status_code=310,
             detail="🔒 Subscription Required: Active Basic Plan (₹599) or Pro Plan (₹799) is required to connect your Telegram account."
         )
 
@@ -328,10 +369,14 @@ async def verify_auth_code(data: VerifyCodeRequest, current_user: dict = Depends
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/api/auth/logout-telegram")
+@app.post("/api/auth/logout")
 async def logout_telegram(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    return await telegram_manager.logout_user_telegram(user_id)
+    try:
+        res = await telegram_manager.logout_user(user_id)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/channels")
@@ -339,11 +384,11 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     client = await telegram_manager.get_client_for_user(user_id)
 
-    if not client or not client.is_connected() or not await client.is_user_authorized():
-        return {"success": False, "channels": [], "detail": "Telegram not authorized"}
+    if not client:
+        return {"success": False, "channels": [], "detail": "Telegram client not active for user."}
 
     try:
-        dialogs = await client.get_dialogs()
+        dialogs = await client.get_dialogs(limit=200)
         channels = []
         for d in dialogs:
             chat_type = "user"
@@ -352,26 +397,106 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
             elif d.is_group:
                 chat_type = "group"
 
+            display_name = d.name or getattr(d.entity, "title", None) or getattr(d.entity, "first_name", None) or f"Chat {d.id}"
+
             channels.append({
                 "id": d.id,
-                "name": d.title or d.name or "Private Chat",
+                "name": display_name,
                 "type": chat_type,
-                "unread_count": d.unread_count
+                "unread_count": getattr(d, "unread_count", 0)
             })
 
         return {"success": True, "channels": channels}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        print(f"❌ Error fetching channels for user {user_id}: {e}")
+        return {"success": False, "channels": [], "detail": str(e)}
+
+
+async def resolve_telegram_entity(client, channel_id: str):
+    target_chat = int(channel_id) if (channel_id.isdigit() or channel_id.startswith("-")) else channel_id
+    try:
+        return await client.get_entity(target_chat)
+    except Exception as first_err:
+        print(f"⚠️ Direct get_entity failed for {channel_id}: {first_err}. Attempting dialogs search fallback...")
+        try:
+            dialogs = await client.get_dialogs(limit=200)
+            target_clean = str(channel_id).replace("-100", "").replace("-", "")
+            for d in dialogs:
+                d_clean = str(d.id).replace("-100", "").replace("-", "")
+                if d_clean == target_clean:
+                    print(f"✅ Found input entity in dialogs fallback for {channel_id}: {d.name}")
+                    return d.entity
+        except Exception as dialog_err:
+            print(f"⚠️ Dialogs search fallback failed for {channel_id}: {dialog_err}")
+        raise first_err
 
 
 @app.get("/api/messages")
-async def get_messages(current_user: dict = Depends(get_current_user)):
+async def get_messages(
+    channel_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["id"]
+    client = await telegram_manager.get_client_for_user(user_id)
+
+    print(f"[DEBUG] Selected source: {channel_id}")
+
+    is_authed = False
+    if client and client.is_connected():
+        try:
+            is_authed = await client.is_user_authorized()
+        except Exception:
+            is_authed = False
+
+    if not is_authed:
+        print(f"[DEBUG] Telegram client not authorized for user {user_id[:8]}")
+        return {"success": True, "messages": [], "count": 0}
+
+    # 1. If channel_id is specified (and not "all"), fetch latest messages directly from Telegram channel
+    if channel_id and channel_id != "all":
+        try:
+            entity = await resolve_telegram_entity(client, channel_id)
+            chat_name = getattr(entity, "title", None) or getattr(entity, "first_name", "Channel")
+
+            settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
+
+            history = await client.get_messages(entity, limit=30)
+            fetched_msgs = []
+            for msg in history:
+                if not msg.text and not msg.message:
+                    continue
+                raw_text = msg.text or msg.message or ""
+                transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
+
+                fetched_msgs.append({
+                    "id": msg.id,
+                    "chat_id": channel_id,
+                    "chat_name": chat_name,
+                    "raw_message": raw_text,
+                    "transformed_message": transformed_text,
+                    "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
+                    "status": "synced" if should_forward else f"skipped ({reason})",
+                    "telegram_posted": False
+                })
+
+            print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {chat_name}")
+            return {"success": True, "messages": fetched_msgs, "count": len(fetched_msgs)}
+        except Exception as err:
+            err_detail = f"Telegram error fetching channel {channel_id}: ({type(err).__name__}) {str(err)}"
+            print(f"❌ {err_detail}")
+            return {"success": False, "messages": [], "error": str(err), "detail": err_detail}
+
+    # 2. Fallback to Supabase sync logs
     if IS_SUPABASE_CONFIGURED:
         db_logs = get_user_sync_logs_from_db(user_id, limit=100)
         if db_logs:
             formatted_logs = []
             for log in db_logs:
+                if channel_id and channel_id != "all":
+                    log_chat_id = str(log.get("chat_id", "")).replace("-100", "").replace("-", "")
+                    target_id = str(channel_id).replace("-100", "").replace("-", "")
+                    if log_chat_id != target_id:
+                        continue
                 formatted_logs.append({
                     "id": log.get("telegram_message_id"),
                     "chat_id": log.get("chat_id"),
@@ -382,10 +507,21 @@ async def get_messages(current_user: dict = Depends(get_current_user)):
                     "status": log.get("status", "synced"),
                     "webhook_url": log.get("webhook_url", "")
                 })
-            return {"success": True, "messages": formatted_logs}
+            print(f"[DEBUG] Messages received from DB logs: {len(formatted_logs)}")
+            if formatted_logs:
+                return {"success": True, "messages": formatted_logs, "count": len(formatted_logs)}
 
+    # 3. Fallback to in-memory messages
     messages = get_user_messages(user_id)
-    return {"success": True, "messages": messages}
+    if channel_id and channel_id != "all":
+        target_id = str(channel_id).replace("-100", "").replace("-", "")
+        messages = [
+            m for m in messages
+            if str(m.get("chat_id", "")).replace("-100", "").replace("-", "") == target_id
+        ]
+
+    print(f"[DEBUG] Messages received: {len(messages)}")
+    return {"success": True, "messages": messages, "count": len(messages)}
 
 
 @app.post("/api/settings")
@@ -393,10 +529,16 @@ async def update_settings(data: UpdateSettingsRequest, current_user: dict = Depe
     user_id = current_user["id"]
     new_data = {k: v for k, v in data.model_dump().items() if v is not None}
 
+    print(f"[DEBUG] Saving configuration: Selected source={new_data.get('source_channel_id')}, Selected destination={new_data.get('destination_channel_id')}")
+
     if IS_SUPABASE_CONFIGURED:
         saved = save_user_settings_to_db(user_id, new_data)
     else:
         saved = save_settings(new_data)
+
+    telegram_manager.update_settings_cache(user_id, saved)
+
+    print(f"[DEBUG] Configuration saved: source={saved.get('source_channel_id')}, destination={saved.get('destination_channel_id')}")
 
     return {"success": True, "settings": saved}
 

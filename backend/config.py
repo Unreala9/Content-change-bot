@@ -21,6 +21,9 @@ DEFAULT_SETTINGS = {
     "override_all_links": False,
     "custom_link_url": "",
     "remove_all_links": False,
+    "override_media_image": False,
+    "custom_image_url": "",
+    "strip_media_images": False,
     "keyword_filter": "",
     "filter_mode": "all",  # "all" or "contains"
     "enabled": True

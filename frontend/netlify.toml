@@ -1,10 +1,6 @@
 [build]
-  publish = "."
-
-[[redirects]]
-  from = "/login"
-  to = "/login.html"
-  status = 200
+  command = "npm run build"
+  publish = "dist"
 
 [[redirects]]
   from = "/*"
