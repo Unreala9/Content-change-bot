@@ -302,6 +302,25 @@ export default function App() {
     await supabase.auth.signOut().catch(() => {});
   };
 
+  const handleDisconnectTelegram = async () => {
+    try {
+      const res = await authFetch("/api/auth/logout", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast("Telegram account disconnected successfully!", "info");
+        setChannels([]);
+        setSourceMessages([]);
+        setDestinationMessages([]);
+        fetchStatus();
+      } else {
+        showToast(data.detail || "Failed to disconnect Telegram account", "error");
+      }
+    } catch (err) {
+      console.error("Error disconnecting Telegram:", err);
+      showToast("Error disconnecting Telegram: " + err.message, "error");
+    }
+  };
+
   if (authLoading) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#090d16", color: "#ffffff" }}>
@@ -348,6 +367,7 @@ export default function App() {
             if (activeDestId) fetchDestinationMessages(activeDestId);
           }}
           onLogoutUser={handleLogoutUser}
+          onDisconnectTelegram={handleDisconnectTelegram}
         />
 
         {activeTab === "tab-studio" && (
@@ -375,6 +395,7 @@ export default function App() {
             messages={messages}
             setActiveTab={setActiveTab}
             onOpenLogin={() => setIsAuthModalOpen(true)}
+            onDisconnectTelegram={handleDisconnectTelegram}
           />
         )}
 

@@ -68,6 +68,12 @@ class MultiUserTelegramManager:
         self.active_clients: Dict[str, TelegramClient] = {}
         self.pending_logins: Dict[str, Dict[str, Any]] = {}
         self.local_fallback_client: Optional[TelegramClient] = None
+        self._locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_user_lock(self, user_id: str) -> asyncio.Lock:
+        if user_id not in self._locks:
+            self._locks[user_id] = asyncio.Lock()
+        return self._locks[user_id]
 
     async def start(self):
         print("🚀 Starting Telegram Sync Hub...")
@@ -125,36 +131,45 @@ class MultiUserTelegramManager:
         if user_id in self.active_clients and self.active_clients[user_id].is_connected():
             return self.active_clients[user_id]
 
-        try:
-            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-            await client.connect()
+        async with self._get_user_lock(user_id):
+            if user_id in self.active_clients and self.active_clients[user_id].is_connected():
+                return self.active_clients[user_id]
 
-            if not await client.is_user_authorized():
-                print(f"⚠️ StringSession for user {identifier or user_id} is no longer authorized.")
-                await client.disconnect()
+            try:
+                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+                await client.connect()
+
+                if not await client.is_user_authorized():
+                    print(f"⚠️ StringSession for user {identifier or user_id} is no longer authorized.")
+                    await client.disconnect()
+                    if IS_SUPABASE_CONFIGURED:
+                        update_user_profile_in_db(user_id, {"telegram_session_string": ""})
+                    return None
+
+                # Warm up internal Telethon entity cache for instant 0ms channel resolution
+                try:
+                    await client.get_dialogs(limit=100)
+                    print(f"⚡ Entity cache warmed up for User: {identifier or user_id}")
+                except Exception as cache_err:
+                    print(f"⚠️ Notice warming dialogs cache: {cache_err}")
+
+                self._attach_listener(user_id, client)
+                self.active_clients[user_id] = client
+                print(f"✅ Active Telegram client started for User: {identifier or user_id}")
+                return client
+            except AuthKeyDuplicatedError as e:
+                print(f"⚠️ Telegram AuthKeyDuplicatedError for user {identifier or user_id}: {e}")
+                if user_id in self.active_clients and self.active_clients[user_id].is_connected():
+                    return self.active_clients[user_id]
+                return None
+            except AuthKeyUnregisteredError as e:
+                print(f"⚠️ Telegram Session revoked for user {identifier or user_id}: {e}")
                 if IS_SUPABASE_CONFIGURED:
                     update_user_profile_in_db(user_id, {"telegram_session_string": ""})
                 return None
-
-            # Warm up internal Telethon entity cache for instant 0ms channel resolution
-            try:
-                await client.get_dialogs(limit=100)
-                print(f"⚡ Entity cache warmed up for User: {identifier or user_id}")
-            except Exception as cache_err:
-                print(f"⚠️ Notice warming dialogs cache: {cache_err}")
-
-            self._attach_listener(user_id, client)
-            self.active_clients[user_id] = client
-            print(f"✅ Active Telegram client started for User: {identifier or user_id}")
-            return client
-        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError) as e:
-            print(f"⚠️ Telegram Session revoked/invalidated for user {identifier or user_id}: {e}")
-            if IS_SUPABASE_CONFIGURED:
-                update_user_profile_in_db(user_id, {"telegram_session_string": ""})
-            return None
-        except Exception as e:
-            print(f"⚠️ Error starting Telegram session for user {identifier or user_id}: {e}")
-            return None
+            except Exception as e:
+                print(f"⚠️ Error starting Telegram session for user {identifier or user_id}: {e}")
+                return None
 
     def _attach_listener(self, user_id: str, client: TelegramClient):
         @client.on(events.NewMessage)
@@ -409,6 +424,8 @@ class MultiUserTelegramManager:
             })
 
         return {"success": True, "message": "Telegram account disconnected successfully!"}
+
+    logout_user = logout_user_telegram
 
 
 # Global Singleton Manager Instance
