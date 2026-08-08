@@ -190,12 +190,13 @@ class MultiUserTelegramManager:
                 configured_source = str(settings.get("source_channel_id", "all")).strip()
                 if configured_source and configured_source != "all":
                     clean_event_chat = str(event.chat_id).replace("-100", "").replace("-", "")
+                    clean_sender_id = str(event.sender_id).replace("-100", "").replace("-", "") if event.sender_id else ""
                     clean_config_source = configured_source.replace("-100", "").replace("-", "")
-                    if clean_event_chat != clean_config_source:
+                    if clean_event_chat != clean_config_source and clean_sender_id != clean_config_source:
                         return
 
                 # Import dynamic text transform function
-                from main import apply_text_transformation
+                from main import apply_text_transformation, resolve_telegram_entity
                 transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
 
                 log_item = {
@@ -220,44 +221,41 @@ class MultiUserTelegramManager:
                     return
 
                 # 1. Direct Telegram Auto-Posting to Destination Channel (INSTANT HIGH PRIORITY)
-                auto_post_telegram = settings.get("auto_post_telegram", False)
+                auto_post_telegram = settings.get("auto_post_telegram", True)
                 dest_channel_id = str(settings.get("destination_channel_id", "")).strip()
 
                 if auto_post_telegram and dest_channel_id:
-                    try:
-                        target_dest = int(dest_channel_id) if (dest_channel_id.isdigit() or dest_channel_id.startswith("-")) else dest_channel_id
+                    clean_dest = dest_channel_id.replace("-100", "").replace("-", "")
+                    clean_event_chat = str(event.chat_id).replace("-100", "").replace("-", "")
+
+                    if clean_event_chat == clean_dest:
+                        print(f"⏩ [Skip Relay] Source chat is destination channel itself ({dest_channel_id})")
+                    else:
                         try:
-                            dest_entity = await client.get_entity(target_dest)
-                        except Exception:
-                            dialogs = await client.get_dialogs(limit=200)
-                            clean_target = str(dest_channel_id).replace("-100", "").replace("-", "")
-                            dest_entity = None
-                            for d in dialogs:
-                                if str(d.id).replace("-100", "").replace("-", "") == clean_target:
-                                    dest_entity = d.entity
-                                    break
+                            dest_entity = await resolve_telegram_entity(client, dest_channel_id)
                             if not dest_entity:
-                                raise
+                                raise Exception(f"Could not resolve entity for destination channel {dest_channel_id}")
 
-                        override_image = settings.get("override_media_image", False)
-                        custom_image_url = settings.get("custom_image_url", "").strip()
-                        strip_media = settings.get("strip_media_images", False)
+                            override_image = settings.get("override_media_image", False)
+                            custom_image_url = settings.get("custom_image_url", "").strip()
+                            strip_media = settings.get("strip_media_images", False)
 
-                        if strip_media:
-                            await client.send_message(entity=dest_entity, message=transformed_text)
-                            print(f"🚫 [STRIP MEDIA] Media stripped. Sent text-only message to {dest_channel_id}")
-                        elif override_image and custom_image_url:
-                            await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
-                        elif event.media:
-                            await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
-                        else:
-                            await client.send_message(entity=dest_entity, message=transformed_text)
+                            if strip_media:
+                                await client.send_message(entity=dest_entity, message=transformed_text)
+                                print(f"🚫 [STRIP MEDIA] Media stripped. Sent text-only message to {dest_channel_id}")
+                            elif override_image and custom_image_url:
+                                await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
+                            elif event.media:
+                                await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
+                            else:
+                                await client.send_message(entity=dest_entity, message=transformed_text)
 
-                        log_item["telegram_posted"] = True
-                        print(f"⚡ [INSTANT RELAY User:{user_id[:8]}] Posted to Telegram destination ({dest_channel_id})")
-                    except Exception as tg_err:
-                        print(f"⚠️ [User:{user_id[:8]}] Telegram auto-post error: {tg_err}")
-                        log_item["telegram_error"] = str(tg_err)
+                            log_item["telegram_posted"] = True
+                            stats["forwarded"] += 1
+                            print(f"⚡ [INSTANT RELAY User:{user_id[:8]}] Posted to Telegram destination ({dest_channel_id})")
+                        except Exception as tg_err:
+                            print(f"⚠️ [User:{user_id[:8]}] Telegram auto-post error: {tg_err}")
+                            log_item["telegram_error"] = str(tg_err)
 
                 # Save log asynchronously without blocking the main event loop
                 asyncio.create_task(asyncio.to_thread(add_user_message_log, user_id, log_item))
@@ -395,7 +393,7 @@ class MultiUserTelegramManager:
         except Exception as e:
             raise Exception(str(e))
 
-    async def logout_user_telegram(self, user_id: str) -> dict:
+    async def logout_user(self, user_id: str) -> dict:
         if user_id in self.active_clients:
             client = self.active_clients[user_id]
             try:
@@ -425,7 +423,8 @@ class MultiUserTelegramManager:
 
         return {"success": True, "message": "Telegram account disconnected successfully!"}
 
-    logout_user = logout_user_telegram
+    logout_user_telegram = logout_user
+    update_settings_cache = staticmethod(update_settings_cache)
 
 
 # Global Singleton Manager Instance

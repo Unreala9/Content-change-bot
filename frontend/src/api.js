@@ -25,7 +25,11 @@ export async function refreshAccessToken() {
   if (!refreshPromise) {
     refreshPromise = supabase.auth.refreshSession().then(({ data, error }) => {
       if (error) {
-        console.error("[AUTH] Session refresh failed:", error);
+        if (error.name === "AuthSessionMissingError" || error.message?.includes("Auth session missing")) {
+          console.info("[AUTH] No active auth session to refresh.");
+        } else {
+          console.warn("[AUTH] Session refresh failed:", error.message || error);
+        }
         return null;
       }
       return data.session?.access_token ?? null;
