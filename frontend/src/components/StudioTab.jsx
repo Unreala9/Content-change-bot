@@ -206,7 +206,7 @@ export default function StudioTab({
               const val = e.target.value;
               setSourceChannel(val);
               console.info("[STUDIO DEBUG] Selected source channel changed to:", val);
-              if (onFetchMessages) onFetchMessages(val);
+              if (onFetchSourceMessages) onFetchSourceMessages(val);
               if (onSaveRules) {
                 onSaveRules({
                   source_channel_id: val,

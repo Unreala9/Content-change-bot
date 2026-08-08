@@ -42,7 +42,8 @@ from supabase_client import (
 from telegram_manager import (
     telegram_manager,
     get_user_messages,
-    get_user_stats
+    get_user_stats,
+    update_settings_cache
 )
 
 # Fix Windows terminal UTF-8 encoding
@@ -230,6 +231,7 @@ else:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -405,13 +407,16 @@ async def logout_telegram(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+user_channels_cache: Dict[str, List[dict]] = {}
+
 @app.get("/api/channels")
 async def get_channels(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     client = await telegram_manager.get_client_for_user(user_id)
 
     if not client:
-        return {"success": False, "channels": [], "detail": "Telegram client not active for user."}
+        cached = user_channels_cache.get(user_id, [])
+        return {"success": bool(cached), "channels": cached, "detail": "Telegram client not active for user."}
 
     try:
         if not client.is_connected():
@@ -434,9 +439,13 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
                 "unread_count": getattr(d, "unread_count", 0)
             })
 
+        user_channels_cache[user_id] = channels
         return {"success": True, "channels": channels}
     except Exception as e:
         print(f"❌ Error fetching channels for user {user_id}: {e}")
+        cached = user_channels_cache.get(user_id, [])
+        if cached:
+            return {"success": True, "channels": cached, "detail": f"Using cached dialogs ({e})"}
         return {"success": False, "channels": [], "detail": str(e)}
 
 

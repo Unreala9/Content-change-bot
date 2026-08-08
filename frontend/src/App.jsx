@@ -121,8 +121,10 @@ export default function App() {
         return;
       }
       const data = await res.json();
-      if (data.success && Array.isArray(data.channels)) {
+      if (data.success && Array.isArray(data.channels) && data.channels.length > 0) {
         setChannels(data.channels);
+      } else if (data.success && Array.isArray(data.channels)) {
+        setChannels((prev) => (prev && prev.length > 0 ? prev : []));
       } else {
         console.warn("[fetchChannels] API returned non-success:", data.detail || data.error || "No channels available");
       }
