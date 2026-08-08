@@ -10,8 +10,6 @@ export default function Header({ activeTab, setActiveTab, status, onOpenLogin, o
     "tab-studio": { title: "Side-by-Side Sync Studio", sub: "Source Channel Extract → Live Modifier Engine → Destination Channel Paste" },
     "tab-overview": { title: "Dashboard Overview & Stats", sub: "Real-time Telegram message listener & n8n webhook automation" },
     "tab-channels": { title: "Dialogs & Channels Matrix", sub: "Inspect, search and manage all accessible Telegram channels and chats" },
-    "tab-rules": { title: "n8n & Rules Engine Config", sub: "Configure global transformation rules, replacements, and webhook targets" },
-    "tab-feed": { title: "Live Sync Feed", sub: "Real-time feed of intercepted and transformed Telegram messages" },
     "tab-pricing": { title: "Pricing & Subscription Plans", sub: "Select a plan to enable real-time Telegram channel syncing" }
   };
 

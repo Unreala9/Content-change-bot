@@ -46,21 +46,7 @@ export default function Sidebar({ activeTab, setActiveTab, status, onLogoutUser 
           <span>Channels & Chats</span>
         </button>
 
-        <button
-          className={`nav-btn ${activeTab === "tab-rules" ? "active" : ""}`}
-          onClick={() => setActiveTab("tab-rules")}
-        >
-          <i className="fa-solid fa-bolt"></i>
-          <span>n8n & Rules Engine</span>
-        </button>
 
-        <button
-          className={`nav-btn ${activeTab === "tab-feed" ? "active" : ""}`}
-          onClick={() => setActiveTab("tab-feed")}
-        >
-          <i className="fa-solid fa-list-check"></i>
-          <span>Live Sync Feed</span>
-        </button>
 
         <button
           className={`nav-btn ${activeTab === "tab-pricing" ? "active" : ""}`}

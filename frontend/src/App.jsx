@@ -7,8 +7,6 @@ import Header from "./components/Header";
 import StudioTab from "./components/StudioTab";
 import OverviewTab from "./components/OverviewTab";
 import ChannelsTab from "./components/ChannelsTab";
-import RulesTab from "./components/RulesTab";
-import FeedTab from "./components/FeedTab";
 import PricingTab from "./components/PricingTab";
 import AuthModal from "./components/AuthModal";
 import LoginPage from "./components/LoginPage";
@@ -24,8 +22,11 @@ export default function App() {
 
   const [sourceMessages, setSourceMessages] = useState([]);
   const [destinationMessages, setDestinationMessages] = useState([]);
+
+  // Independent Channel State (null until settings loaded from backend)
   const [activeSourceId, setActiveSourceId] = useState(null);
   const [activeDestId, setActiveDestId] = useState(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const activeSourceIdRef = useRef(activeSourceId);
   const activeDestIdRef = useRef(activeDestId);
@@ -60,7 +61,7 @@ export default function App() {
       setSession(s);
       if (s?.access_token) {
         localStorage.setItem("sb_access_token", s.access_token);
-        console.info("[AUTH] Session restored. Access token prefix:", `${s.access_token.slice(0, 10)}...`);
+        console.info("[AUTH] Session restored.");
       }
       setAuthLoading(false);
     }).catch(err => {
@@ -77,6 +78,9 @@ export default function App() {
       } else {
         localStorage.removeItem("sb_access_token");
         setShowLoginPage(true);
+        setSettingsLoaded(false);
+        setActiveSourceId(null);
+        setActiveDestId(null);
       }
       setAuthLoading(false);
     });
@@ -98,18 +102,31 @@ export default function App() {
       }
       const data = await res.json();
       setStatus(data);
-      if (data?.settings?.source_channel_id && !activeSourceIdRef.current) {
-        setActiveSourceId(data.settings.source_channel_id);
-        activeSourceIdRef.current = data.settings.source_channel_id;
-      }
-      if (data?.settings?.destination_channel_id && !activeDestIdRef.current) {
-        setActiveDestId(data.settings.destination_channel_id);
-        activeDestIdRef.current = data.settings.destination_channel_id;
+
+      if (data?.settings) {
+        const savedSource = data.settings.source_channel_id ?? "all";
+        const savedDest = data.settings.destination_channel_id ?? "";
+
+        if (activeSourceIdRef.current === null) {
+          setActiveSourceId(savedSource);
+          activeSourceIdRef.current = savedSource;
+        }
+        if (activeDestIdRef.current === null) {
+          setActiveDestId(savedDest);
+          activeDestIdRef.current = savedDest;
+        }
+        setSettingsLoaded(true);
       }
     } catch (err) {
       console.error("Error fetching status:", err);
     }
   };
+
+  useEffect(() => {
+    if (session?.access_token && !showLoginPage) {
+      fetchStatus();
+    }
+  }, [session?.access_token, showLoginPage]);
 
   const fetchChannels = async () => {
     try {
@@ -160,24 +177,14 @@ export default function App() {
       if (res.status === 401) { setShowLoginPage(true); return; }
       const data = await res.json();
 
-      // Guard 1: Ignore stale out-of-order response
       if (requestId !== sourceRequestIdRef.current) {
-        console.warn("[SOURCE FETCH] Ignoring stale out-of-order response", { requestedChannelId, requestId, current: sourceRequestIdRef.current });
         return;
       }
 
-      // Guard 2: Ignore response if active channel changed
       const currentActive = activeSourceIdRef.current || status?.settings?.source_channel_id || "all";
       if (!isSameChannelId(currentActive, requestedChannelId)) {
-        console.warn("[SOURCE FETCH] Ignoring stale response for inactive channel", { requestedChannelId, currentActive });
         return;
       }
-
-      console.log("[SOURCE FETCH]", {
-        channelId: requestedChannelId,
-        channelName: data.chat_name,
-        count: data.messages?.length
-      });
 
       if (res.ok && data.success && Array.isArray(data.messages)) {
         setSourceMessages(data.messages);
@@ -202,7 +209,6 @@ export default function App() {
       }
 
       if (!targetId || targetId === "undefined" || targetId === "null" || targetId === "all") {
-        console.info("[DEST FETCH] Skipped: Invalid destination channel ID.");
         return;
       }
 
@@ -214,24 +220,14 @@ export default function App() {
       if (res.status === 401) { setShowLoginPage(true); return; }
       const data = await res.json();
 
-      // Guard 1: Ignore stale out-of-order response
       if (requestId !== destRequestIdRef.current) {
-        console.warn("[DEST FETCH] Ignoring stale out-of-order response", { requestedChannelId, requestId, current: destRequestIdRef.current });
         return;
       }
 
-      // Guard 2: Ignore response if active channel changed
       const currentActive = activeDestIdRef.current || status?.settings?.destination_channel_id || "";
       if (!isSameChannelId(currentActive, requestedChannelId)) {
-        console.warn("[DEST FETCH] Ignoring stale response for inactive channel", { requestedChannelId, currentActive });
         return;
       }
-
-      console.log("[DEST FETCH]", {
-        channelId: requestedChannelId,
-        channelName: data.chat_name,
-        count: data.messages?.length
-      });
 
       if (res.ok && data.success && Array.isArray(data.messages)) {
         setDestinationMessages(data.messages);
@@ -241,32 +237,30 @@ export default function App() {
     }
   };
 
+  // Controlled Polling Interval
   useEffect(() => {
-    if (!session || authLoading || showLoginPage) return;
+    if (!session || authLoading || showLoginPage || !settingsLoaded) return;
 
     const loadAllData = async () => {
-      console.info("[polling function] Running polling cycle...");
       await fetchStatus();
       await fetchChannels();
 
-      const currentSrc = activeSourceIdRef.current || status?.settings?.source_channel_id || "all";
-      const currentDest = activeDestIdRef.current || status?.settings?.destination_channel_id;
+      const currentSrc = activeSourceIdRef.current || "all";
+      const currentDest = activeDestIdRef.current || "";
 
       if (currentSrc) await fetchSourceMessages(currentSrc);
       if (currentDest) await fetchDestinationMessages(currentDest);
     };
 
     loadAllData();
-
     const intervalId = window.setInterval(loadAllData, 5000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [session?.access_token, authLoading, showLoginPage]);
+  }, [session?.access_token, authLoading, showLoginPage, settingsLoaded, activeSourceId, activeDestId]);
 
   const handleSaveRules = async (payload) => {
-    console.info("[saveSettings] Invoked with payload:", payload);
     try {
       const res = await authFetch("/api/settings", {
         method: "POST",
@@ -274,21 +268,18 @@ export default function App() {
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      console.info(`[saveSettings] Response status: ${res.status}`, data);
       if (res.ok && data.success) {
-        console.info("[saveSettings] Save successful:", data.settings);
         showToast("Engine Settings & Rules Saved Successfully!", "success");
-        if (payload.source_channel_id) {
+        if (payload.source_channel_id !== undefined) {
           setActiveSourceId(payload.source_channel_id);
-          fetchSourceMessages(payload.source_channel_id);
+          activeSourceIdRef.current = payload.source_channel_id;
         }
-        if (payload.destination_channel_id) {
+        if (payload.destination_channel_id !== undefined) {
           setActiveDestId(payload.destination_channel_id);
-          fetchDestinationMessages(payload.destination_channel_id);
+          activeDestIdRef.current = payload.destination_channel_id;
         }
         fetchStatus();
       } else {
-        console.error("[saveSettings] Save failed:", data.detail || data.error);
         showToast("Error saving settings: " + (data.detail || "Failed"), "error");
       }
     } catch (err) {
@@ -301,6 +292,9 @@ export default function App() {
     localStorage.removeItem("sb_access_token");
     setSession(null);
     setShowLoginPage(true);
+    setSettingsLoaded(false);
+    setActiveSourceId(null);
+    setActiveDestId(null);
     await supabase.auth.signOut().catch(() => {});
   };
 
@@ -308,7 +302,7 @@ export default function App() {
     try {
       const res = await authFetch("/api/auth/logout", { method: "POST" });
       const data = await res.json();
-      if (res.ok && data.success) {
+      if (res.ok && (data.success || data.connected === false)) {
         showToast("Telegram account disconnected successfully!", "info");
         setChannels([]);
         setSourceMessages([]);
@@ -407,19 +401,6 @@ export default function App() {
             onFetchChannels={fetchChannels}
             status={status}
             onOpenLogin={() => setIsAuthModalOpen(true)}
-          />
-        )}
-
-        {activeTab === "tab-rules" && (
-          <RulesTab
-            status={status}
-            onSaveRules={handleSaveRules}
-          />
-        )}
-
-        {activeTab === "tab-feed" && (
-          <FeedTab
-            messages={messages}
           />
         )}
 

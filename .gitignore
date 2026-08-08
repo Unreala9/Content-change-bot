@@ -2,6 +2,7 @@
 .env
 
 # Session files
+sessions/
 *.session
 *.session-journal
 

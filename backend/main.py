@@ -2,8 +2,7 @@ import os
 import sys
 import re
 import asyncio
-from typing import Optional, List, Dict, Any
-
+from typing import Optional, List, Dict, Any, Set
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +51,17 @@ if sys.platform.startswith("win"):
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+
+
+# Tracked background tasks to ensure clean shutdown without 'Task destroyed but pending' warnings
+app_background_tasks: Set[asyncio.Task] = set()
+
+
+def create_tracked_task(coro):
+    task = asyncio.create_task(coro)
+    app_background_tasks.add(task)
+    task.add_done_callback(app_background_tasks.discard)
+    return task
 
 
 # --- Request Schemas ---
@@ -123,13 +133,8 @@ class VerifyRazorpayPaymentRequest(BaseModel):
     user_id: Optional[str] = None
 
 
-
 # --- Text Transformation & Filtering Engine ---
 def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str]:
-    """
-    Applies find/replace (multi-rule & comma-separated), link modifications, prefix/suffix, and keyword filter.
-    Returns: (transformed_text, should_forward, filter_reason)
-    """
     if not text:
         text = ""
 
@@ -139,45 +144,39 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
     # Keyword Filter logic
     if filter_mode == "allow_only" and keyword_filter:
         keywords = [k.strip().lower() for k in keyword_filter.split(",") if k.strip()]
-        text_lower = text.lower()
-        if not any(kw in text_lower for kw in keywords):
-            return text, False, f"Keyword missing (filter: '{keyword_filter}')"
+        if not any(k in text.lower() for k in keywords):
+            return text, False, f"Message does not contain allowed keywords ({keyword_filter})"
 
-    if filter_mode == "block_any" and keyword_filter:
+    elif filter_mode == "block_if" and keyword_filter:
         keywords = [k.strip().lower() for k in keyword_filter.split(",") if k.strip()]
-        text_lower = text.lower()
-        if any(kw in text_lower for kw in keywords):
-            return text, False, f"Blocked keyword found in message (filter: '{keyword_filter}')"
+        if any(k in text.lower() for k in keywords):
+            return text, False, f"Message contains blocked keyword from ({keyword_filter})"
 
     transformed = text
 
-    # 1. Multiple Structured Replacement Rules
-    replacement_rules = settings.get("replacement_rules", [])
-    if isinstance(replacement_rules, list):
+    # Multi-rule replacement
+    replacement_rules = settings.get("replacement_rules")
+    if replacement_rules and isinstance(replacement_rules, list):
         for rule in replacement_rules:
             if isinstance(rule, dict):
-                find_val = rule.get("find", "")
-                replace_val = rule.get("replace", "")
-                if find_val and find_val.strip():
-                    pattern = re.compile(re.escape(find_val.strip()), re.IGNORECASE)
-                    transformed = pattern.sub(replace_val, transformed)
+                f_str = rule.get("find", "")
+                r_str = rule.get("replace", "")
+                if f_str:
+                    transformed = transformed.replace(f_str, r_str)
 
-    # 2. Quick Comma-Separated Replacement Mode (Fallback)
+    # Legacy Find/Replace (comma-separated support)
     find_str = settings.get("find_text", "").strip()
     replace_str = settings.get("replace_text", "").strip()
 
-    if find_str and replace_str:
+    if find_str:
         find_list = [f.strip() for f in find_str.split(",") if f.strip()]
-        replace_list = [r.strip() for r in replace_str.split(",") if r.strip()]
+        replace_list = [r.strip() for r in replace_str.split(",")]
+        for idx, target in enumerate(find_list):
+            rep = replace_list[idx] if idx < len(replace_list) else (replace_list[-1] if replace_list else "")
+            transformed = transformed.replace(target, rep)
 
-        for i, target in enumerate(find_list):
-            rep = replace_list[i] if i < len(replace_list) else (replace_list[-1] if replace_list else "")
-            pattern = re.compile(re.escape(target), re.IGNORECASE)
-            transformed = pattern.sub(rep, transformed)
-
-    # 3. Link Handling Engine
-    url_pattern = r'(https?://[^\s]+|www\.[^\s]+|t\.me/[^\s]+)'
-
+    # Link modification
+    url_pattern = r'https?://[^\s]+'
     if settings.get("remove_all_links", False):
         transformed = re.sub(url_pattern, '', transformed)
     elif settings.get("override_all_links", False):
@@ -185,7 +184,7 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
         if custom_url:
             transformed = re.sub(url_pattern, custom_url, transformed)
 
-    # 4. Text Prefix & Suffix Formatting
+    # Prefix & Suffix
     prefix = settings.get("text_prefix", "").strip()
     suffix = settings.get("text_suffix", "").strip()
 
@@ -202,13 +201,20 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
 async def lifespan(app_instance: FastAPI):
     await telegram_manager.start()
     yield
-    await telegram_manager.stop()
+    print("🔌 Graceful Shutdown: Disconnecting Telegram clients & cleaning tasks...")
+    await telegram_manager.disconnect_all()
+    for task in list(app_background_tasks):
+        if not task.done():
+            task.cancel()
+    if app_background_tasks:
+        await asyncio.gather(*app_background_tasks, return_exceptions=True)
+    app_background_tasks.clear()
+    print("✅ Application shutdown complete.")
 
 
 # --- FastAPI App ---
 app = FastAPI(title="Telegram Sync Hub VPS Backend API", lifespan=lifespan)
 
-# Enable CORS for Decoupled Frontend Deployment
 default_origins = [
     "https://telegram.adshatke.site",
     "http://telegram.adshatke.site",
@@ -237,6 +243,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.middleware("http")
 async def log_cors_and_requests(request: Request, call_next):
     origin = request.headers.get("origin", "N/A")
@@ -245,11 +252,9 @@ async def log_cors_and_requests(request: Request, call_next):
 
     if method == "OPTIONS":
         response = await call_next(request)
-        print(f"[CORS PREFLIGHT] Method: {method} | Path: {path} | Origin: {origin} | Status: {response.status_code}")
         return response
 
     response = await call_next(request)
-    print(f"[HTTP REQUEST] Method: {method} | Path: {path} | Origin: {origin} | Status: {response.status_code}")
     return response
 
 
@@ -298,20 +303,21 @@ async def get_user_me(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/status")
 async def get_status(current_user: dict = Depends(get_current_user)):
+    """
+    Returns application and Telegram connection status.
+    Does NOT initiate or create a new Telegram connection. Reuses existing client if present.
+    """
     user_id = current_user["id"]
     profile = get_user_profile_from_db(user_id) if IS_SUPABASE_CONFIGURED else {}
-    client = await telegram_manager.get_client_for_user(user_id)
+
+    # Inspect existing client only
+    client = telegram_manager.get_existing_client(user_id)
 
     is_authorized = False
     tg_user = None
 
-    has_session = bool(profile.get("telegram_session_string"))
-    session_expired = bool(profile.get("telegram_phone") and not has_session)
-
-    if client:
+    if client and client.is_connected():
         try:
-            if not client.is_connected():
-                await client.connect()
             if await client.is_user_authorized():
                 is_authorized = True
                 me = await client.get_me()
@@ -322,27 +328,26 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                     "phone": me.phone or profile.get("telegram_phone") or ""
                 }
         except Exception as e:
-            print(f"Notice checking Telegram status for user {user_id}: {e}")
+            print(f"Notice inspecting Telegram status for user {user_id[:8]}: {e}")
 
-    if profile.get("telegram_phone") or profile.get("telegram_first_name"):
-        if not tg_user:
-            tg_user = {
-                "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
-                "first_name": profile.get("telegram_first_name") or "Telegram User",
-                "username": profile.get("telegram_username") or "",
-                "phone": profile.get("telegram_phone") or ""
-            }
+    if not tg_user and (profile.get("telegram_phone") or profile.get("telegram_first_name")):
+        tg_user = {
+            "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
+            "first_name": profile.get("telegram_first_name") or "Telegram User",
+            "username": profile.get("telegram_username") or "",
+            "phone": profile.get("telegram_phone") or ""
+        }
 
     settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
     stats = get_user_stats(user_id)
     subscription = get_user_subscription_from_db(user_id)
 
-    print(f"[DEBUG] Configuration loaded: source_channel_id={settings.get('source_channel_id')}, destination_channel_id={settings.get('destination_channel_id')}, auto_post={settings.get('auto_post_telegram')}")
-    print(f"[DEBUG] Telegram client connected: {bool(client and client.is_connected())}, authorized: {is_authorized}")
+    session_expired = bool(profile.get("telegram_phone") and not is_authorized)
 
     return {
-        "connected": is_authorized or has_session,
+        "connected": is_authorized,
         "authorized": is_authorized,
+        "requires_login": not is_authorized,
         "session_expired": session_expired,
         "user": tg_user,
         "account": current_user,
@@ -412,15 +417,27 @@ user_channels_cache: Dict[str, List[dict]] = {}
 @app.get("/api/channels")
 async def get_channels(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    client = await telegram_manager.get_client_for_user(user_id)
+    client = await telegram_manager.get_client(user_id)
 
-    if not client:
+    if not client or not client.is_connected():
         cached = user_channels_cache.get(user_id, [])
-        return {"success": bool(cached), "channels": cached, "detail": "Telegram client not active for user."}
+        return {
+            "success": bool(cached),
+            "channels": cached,
+            "requires_login": True,
+            "detail": "Telegram client not active for user."
+        }
 
     try:
-        if not client.is_connected():
-            await client.connect()
+        if not await client.is_user_authorized():
+            await telegram_manager.invalidate_session(user_id, reason="Not authorized in get_channels")
+            return {
+                "success": False,
+                "channels": [],
+                "requires_login": True,
+                "detail": "Telegram session expired or not authorized."
+            }
+
         dialogs = await client.get_dialogs(limit=200)
         channels = []
         for d in dialogs:
@@ -433,16 +450,16 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
             display_name = d.name or getattr(d.entity, "title", None) or getattr(d.entity, "first_name", None) or f"Chat {d.id}"
 
             channels.append({
-                "id": d.id,
+                "id": str(d.id),
                 "name": display_name,
                 "type": chat_type,
                 "unread_count": getattr(d, "unread_count", 0)
             })
 
         user_channels_cache[user_id] = channels
-        return {"success": True, "channels": channels}
+        return {"success": True, "channels": channels, "requires_login": False}
     except Exception as e:
-        print(f"❌ Error fetching channels for user {user_id}: {e}")
+        print(f"❌ Error fetching channels for user {user_id[:8]}: {e}")
         cached = user_channels_cache.get(user_id, [])
         if cached:
             return {"success": True, "channels": cached, "detail": f"Using cached dialogs ({e})"}
@@ -474,9 +491,13 @@ async def get_messages(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
-    client = await telegram_manager.get_client_for_user(user_id)
+    settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
 
-    print(f"[DEBUG] Selected source: {channel_id}")
+    target_channel = channel_id if (channel_id is not None and channel_id.strip() != "") else settings.get("source_channel_id", "all")
+    if not target_channel:
+        target_channel = "all"
+
+    client = telegram_manager.get_existing_client(user_id)
 
     is_authed = False
     if client and client.is_connected():
@@ -485,17 +506,11 @@ async def get_messages(
         except Exception:
             is_authed = False
 
-    if not is_authed:
-        print(f"[DEBUG] Telegram client not authorized for user {user_id[:8]}")
-        return {"success": True, "messages": [], "count": 0}
-
-    # 1. If channel_id is specified (and not "all"), fetch latest messages directly from Telegram channel
-    if channel_id and channel_id != "all":
+    # 1. Fetch live messages directly from Telegram if target_channel is specific channel
+    if client and is_authed and target_channel and target_channel != "all":
         try:
-            entity = await resolve_telegram_entity(client, channel_id)
-            channel_title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or f"Channel ({channel_id})"
-
-            settings = get_user_settings_from_db(user_id) if IS_SUPABASE_CONFIGURED else load_settings()
+            entity = await resolve_telegram_entity(client, target_channel)
+            channel_title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or f"Channel ({target_channel})"
 
             history = await client.get_messages(entity, limit=30)
             fetched_msgs = []
@@ -510,7 +525,7 @@ async def get_messages(
 
                 fetched_msgs.append({
                     "id": msg.id,
-                    "chat_id": channel_id,
+                    "chat_id": str(target_channel),
                     "chat_name": channel_title,
                     "raw_message": raw_text,
                     "transformed_message": transformed_text,
@@ -521,33 +536,31 @@ async def get_messages(
                     "telegram_posted": False
                 })
 
-            print(f"[DEBUG] Messages received: {len(fetched_msgs)} from chat {channel_title}")
             return {
                 "success": True,
-                "channel_id": str(channel_id),
+                "channel_id": str(target_channel),
                 "chat_name": channel_title,
                 "messages": fetched_msgs,
                 "count": len(fetched_msgs)
             }
         except Exception as err:
-            err_detail = f"Telegram error fetching channel {channel_id}: ({type(err).__name__}) {str(err)}"
-            print(f"❌ {err_detail}")
-            return {"success": False, "channel_id": str(channel_id), "messages": [], "error": str(err), "detail": err_detail}
+            err_detail = f"Telegram error fetching channel {target_channel}: ({type(err).__name__}) {str(err)}"
+            print(f"⚠️ {err_detail}")
 
-    # 2. Fallback to Supabase sync logs
+    # 2. Fallback to Supabase sync logs strictly filtered by target_channel
     if IS_SUPABASE_CONFIGURED:
         db_logs = get_user_sync_logs_from_db(user_id, limit=100)
         if db_logs:
             formatted_logs = []
             for log in db_logs:
-                if channel_id and channel_id != "all":
+                if target_channel and target_channel != "all":
                     log_chat_id = str(log.get("chat_id", "")).replace("-100", "").replace("-", "")
-                    target_id = str(channel_id).replace("-100", "").replace("-", "")
-                    if log_chat_id != target_id:
+                    clean_target = str(target_channel).replace("-100", "").replace("-", "")
+                    if log_chat_id != clean_target:
                         continue
                 formatted_logs.append({
                     "id": log.get("telegram_message_id"),
-                    "chat_id": log.get("chat_id"),
+                    "chat_id": str(log.get("chat_id", "")),
                     "chat_name": log.get("chat_name", ""),
                     "raw_message": log.get("raw_message", ""),
                     "transformed_message": log.get("transformed_message", ""),
@@ -555,29 +568,26 @@ async def get_messages(
                     "status": log.get("status", "synced"),
                     "webhook_url": log.get("webhook_url", "")
                 })
-            print(f"[DEBUG] Messages received from DB logs: {len(formatted_logs)}")
-            if formatted_logs:
-                return {
-                    "success": True,
-                    "channel_id": str(channel_id or "all"),
-                    "chat_name": "Sync Logs",
-                    "messages": formatted_logs,
-                    "count": len(formatted_logs)
-                }
+            return {
+                "success": True,
+                "channel_id": str(target_channel),
+                "chat_name": "Sync Logs",
+                "messages": formatted_logs,
+                "count": len(formatted_logs)
+            }
 
     # 3. Fallback to in-memory messages
     messages = get_user_messages(user_id)
-    if channel_id and channel_id != "all":
-        target_id = str(channel_id).replace("-100", "").replace("-", "")
+    if target_channel and target_channel != "all":
+        clean_target = str(target_channel).replace("-100", "").replace("-", "")
         messages = [
             m for m in messages
-            if str(m.get("chat_id", "")).replace("-100", "").replace("-", "") == target_id
+            if str(m.get("chat_id", "")).replace("-100", "").replace("-", "") == clean_target
         ]
 
-    print(f"[DEBUG] Messages received: {len(messages)}")
     return {
         "success": True,
-        "channel_id": str(channel_id or "all"),
+        "channel_id": str(target_channel),
         "chat_name": "Local Cache",
         "messages": messages,
         "count": len(messages)
@@ -597,172 +607,42 @@ async def update_settings(data: UpdateSettingsRequest, current_user: dict = Depe
         saved = save_settings(new_data)
 
     telegram_manager.update_settings_cache(user_id, saved)
-
-    print(f"[DEBUG] Configuration saved: source={saved.get('source_channel_id')}, destination={saved.get('destination_channel_id')}")
-
     return {"success": True, "settings": saved}
 
 
 @app.post("/api/send-message")
 async def send_manual_message(data: SendMessageRequest, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    client = await telegram_manager.get_client_for_user(user_id)
+    client = await telegram_manager.get_client(user_id)
 
-    if not client or not client.is_connected() or not await client.is_user_authorized():
-        raise HTTPException(status_code=400, detail="Telegram client is not authorized.")
+    if not client or not client.is_connected():
+        raise HTTPException(status_code=400, detail="Telegram account not connected.")
 
     try:
-        chat_target = data.chat_id
-        if isinstance(chat_target, str) and (chat_target.isdigit() or chat_target.startswith("-")):
-            chat_target = int(chat_target)
-
-        entity = await client.get_entity(chat_target)
-        sent = await client.send_message(entity=entity, message=data.text)
-        return {"success": True, "message_id": sent.id}
+        target_chat = int(data.chat_id) if (str(data.chat_id).isdigit() or str(data.chat_id).startswith("-")) else data.chat_id
+        entity = await client.get_entity(target_chat)
+        msg = await client.send_message(entity, data.text)
+        return {
+            "success": True,
+            "message_id": msg.id,
+            "chat_id": data.chat_id
+        }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Failed to send Telegram message: {str(e)}")
 
 
 @app.post("/api/test-transform")
-async def test_transform(data: TestTransformRequest):
-    settings_dict = data.model_dump()
-    transformed, should_forward, reason = apply_text_transformation(data.sample_text, settings_dict)
+async def test_transform_endpoint(data: TestTransformRequest):
+    settings = data.model_dump()
+    transformed, should_forward, reason = apply_text_transformation(data.sample_text, settings)
     return {
-        "original_text": data.sample_text,
+        "raw_text": data.sample_text,
         "transformed_text": transformed,
         "should_forward": should_forward,
         "reason": reason
     }
 
 
-# --- Subscription & Payment Endpoints (Fallback if Edge Function is disabled) ---
-
-PLANS_CONFIG = {
-    "plan_599": {"name": "Basic Plan (₹599)", "amount": 59900, "currency": "INR", "price": 599},
-    "plan_799": {"name": "Pro Plan (₹799)", "amount": 79900, "currency": "INR", "price": 799}
-}
-
-
-@app.get("/api/subscription/status")
-async def get_subscription_status(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    sub = get_user_subscription_from_db(user_id)
-    return {"success": True, "subscription": sub}
-
-
-@app.post("/api/subscription/create-order")
-async def create_subscription_order(data: CreateRazorpayOrderRequest, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    print(f"[PAYMENT] Requested plan: {data.plan_id} for user: {user_id}")
-
-    if data.plan_id not in PLANS_CONFIG:
-        print(f"[PAYMENT] Error response: Invalid plan_id '{data.plan_id}'")
-        raise HTTPException(status_code=400, detail="Invalid plan selected.")
-
-    plan = PLANS_CONFIG[data.plan_id]
-    mode = "LIVE" if RAZORPAY_KEY_ID.startswith("rzp_live_") else "TEST"
-    print(f"[PAYMENT] Amount: {plan['amount']} paise ({plan['currency']}) | Razorpay mode: {mode}")
-
-    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
-        print("[PAYMENT] Error response: Razorpay credentials missing in environment variables.")
-        raise HTTPException(status_code=500, detail="Razorpay credentials (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) are not configured in backend environment variables.")
-
-    import time
-    receipt_id = f"sub_{user_id[:8]}_{int(time.time())}"
-
-    try:
-        url = "https://api.razorpay.com/v1/orders"
-        auth = (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
-        payload = {
-            "amount": plan["amount"],
-            "currency": plan["currency"],
-            "receipt": receipt_id,
-            "notes": {
-                "user_id": user_id,
-                "plan_id": data.plan_id,
-                "plan_name": plan["name"]
-            }
-        }
-
-        print(f"[PAYMENT] Calling Razorpay Orders API ({url}) with receipt: {receipt_id}...")
-        def _post():
-            return requests.post(url, json=payload, auth=auth, timeout=8)
-        res = await asyncio.to_thread(_post)
-        res_data = res.json()
-        print(f"[PAYMENT] Order create response status {res.status_code}: {res_data}")
-
-        if res.status_code != 200 or "id" not in res_data:
-            err_desc = res_data.get("error", {}).get("description") or res_data.get("detail") or str(res_data)
-            print(f"[PAYMENT] Error response from Razorpay API: {err_desc}")
-            raise HTTPException(status_code=400, detail=f"Razorpay Order Error: {err_desc}")
-
-        order_id = res_data["id"]
-        print(f"[PAYMENT] Razorpay order_id created successfully: {order_id}")
-
-        return {
-            "success": True,
-            "order_id": order_id,
-            "key_id": RAZORPAY_KEY_ID,
-            "amount": plan["amount"],
-            "currency": plan["currency"],
-            "plan_name": plan["name"]
-        }
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        print(f"[PAYMENT] Error response exception: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create payment order: {str(e)}")
-
-
-@app.post("/api/subscription/verify-payment")
-async def verify_subscription_payment(data: VerifyRazorpayPaymentRequest, current_user: dict = Depends(get_current_user)):
-    print(f"[PAYMENT] Verifying payment for order_id: {data.razorpay_order_id}, payment_id: {data.razorpay_payment_id}")
-
-    if not RAZORPAY_KEY_SECRET:
-        print("[PAYMENT] Error response: RAZORPAY_KEY_SECRET is not configured.")
-        raise HTTPException(status_code=500, detail="RAZORPAY_KEY_SECRET is not configured.")
-
-    try:
-        signature_body = f"{data.razorpay_order_id}|{data.razorpay_payment_id}"
-        expected_signature = hmac.new(
-            RAZORPAY_KEY_SECRET.encode("utf-8"),
-            signature_body.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-
-        if expected_signature != data.razorpay_signature:
-            print("[PAYMENT] Error response: Signature verification failed!")
-            raise HTTPException(status_code=400, detail="Invalid Razorpay payment signature! Payment verification failed.")
-
-        print("[PAYMENT] Signature verification succeeded. Activating subscription...")
-        user_id = data.user_id or current_user["id"]
-        plan = PLANS_CONFIG.get(data.plan_id, {"name": "Paid Plan", "price": 599})
-
-        sub_update = {
-            "user_id": user_id,
-            "plan_id": data.plan_id,
-            "plan_name": plan["name"],
-            "amount_paid": plan["price"],
-            "status": "active",
-            "razorpay_order_id": data.razorpay_order_id,
-            "razorpay_payment_id": data.razorpay_payment_id
-        }
-
-        saved_sub = update_user_subscription_in_db(user_id, sub_update)
-        print(f"[PAYMENT] Subscription activated successfully for user {user_id}: {saved_sub}")
-
-        return {
-            "success": True,
-            "message": f"🎉 Payment verified! {plan['name']} activated successfully.",
-            "subscription": saved_sub
-        }
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        print(f"[PAYMENT] Error response exception during verification: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(PORT), reload=False)
