@@ -395,7 +395,7 @@ class MultiUserTelegramManager:
         except Exception as e:
             raise Exception(str(e))
 
-    async def logout_user_telegram(self, user_id: str) -> dict:
+    async def logout_user(self, user_id: str) -> dict:
         if user_id in self.active_clients:
             client = self.active_clients[user_id]
             try:
@@ -425,7 +425,7 @@ class MultiUserTelegramManager:
 
         return {"success": True, "message": "Telegram account disconnected successfully!"}
 
-    logout_user = logout_user_telegram
+    logout_user_telegram = logout_user
 
 
 # Global Singleton Manager Instance

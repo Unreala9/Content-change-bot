@@ -403,6 +403,8 @@ export default function App() {
           <ChannelsTab
             channels={channels}
             onFetchChannels={fetchChannels}
+            status={status}
+            onOpenLogin={() => setIsAuthModalOpen(true)}
           />
         )}
 
