@@ -3,7 +3,7 @@ import { authFetch } from "../api";
 
 export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
   const [step, setStep] = useState(1);
-  const [phone, setPhone] = useState(status?.user?.phone || "+919049629140");
+  const [phone, setPhone] = useState(status?.user?.phone || "");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -97,7 +97,7 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
                 <input
                   type="tel"
                   className="form-control"
-                  placeholder="+91 9049629140"
+                  placeholder="+919876543210"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   required
