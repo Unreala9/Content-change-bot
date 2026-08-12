@@ -549,6 +549,9 @@ async def get_messages(
                     parent = batch_map.get(reply_to_msg_id)
                     if parent:
                         reply_text = parent.raw_text or parent.message or ""
+                        if not reply_text and parent.media:
+                            p_media = "VIDEO" if getattr(parent, "video", None) else ("PHOTO" if getattr(parent, "photo", None) else ("DOCUMENT" if getattr(parent, "document", None) else "MEDIA"))
+                            reply_text = f"[{p_media} Attachment]"
                         if parent.sender:
                             reply_sender = getattr(parent.sender, "first_name", "") or getattr(parent.sender, "title", "") or getattr(parent.sender, "username", "") or ""
                     else:
@@ -556,6 +559,9 @@ async def get_messages(
                             parent_msg = await msg.get_reply_message()
                             if parent_msg:
                                 reply_text = parent_msg.raw_text or parent_msg.message or ""
+                                if not reply_text and parent_msg.media:
+                                    p_media = "VIDEO" if getattr(parent_msg, "video", None) else ("PHOTO" if getattr(parent_msg, "photo", None) else ("DOCUMENT" if getattr(parent_msg, "document", None) else "MEDIA"))
+                                    reply_text = f"[{p_media} Attachment]"
                                 if parent_msg.sender:
                                     reply_sender = getattr(parent_msg.sender, "first_name", "") or getattr(parent_msg.sender, "title", "") or getattr(parent_msg.sender, "username", "") or ""
                         except Exception:
