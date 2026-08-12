@@ -361,7 +361,10 @@ export default function StudioTab({
             <span style={{ fontSize: "12px", lineHeight: "1.4" }}>
               {status?.session_expired ? (
                 <>
-                  <strong>Session Key Revoked for {status?.user?.first_name || "HITESH"} ({status?.user?.phone || "+919049629140"}):</strong> Re-enter 5-digit Telegram login code to issue a fresh active session key.
+                  <strong>
+                    Session Key Revoked{status?.user?.first_name ? ` for ${status.user.first_name}` : ""}{status?.user?.phone ? ` (${status.user.phone})` : ""}:
+                  </strong>{" "}
+                  Re-enter 5-digit Telegram login code to issue a fresh active session key.
                 </>
               ) : (
                 <>
@@ -843,7 +846,17 @@ export default function StudioTab({
                           </span>
                         </div>
                       )}
-                      {m.transformed_message || m.raw_message}
+                      {m.transformed_message || m.raw_message || (
+                        <span style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "12px" }}>
+                          (Media Attachment Forwarded)
+                        </span>
+                      )}
+                      {(m.has_media || m.media_type) && (
+                        <div style={{ marginTop: "6px", display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(16, 185, 129, 0.15)", color: "var(--accent-green)", border: "1px solid rgba(16, 185, 129, 0.3)", borderRadius: "6px", padding: "2px 8px", fontSize: "11px" }}>
+                          <i className={m.media_type === "video" ? "fa-solid fa-video" : (m.media_type === "photo" ? "fa-solid fa-image" : "fa-solid fa-paperclip")}></i>
+                          <span>{m.media_type ? m.media_type.toUpperCase() : "MEDIA ATTACHMENT"}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", justifyContent: "flex-start", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
