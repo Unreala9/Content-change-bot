@@ -37,8 +37,8 @@ def build_telegram_client(session_target) -> TelegramClient:
     """
     Constructs a highly resilient TelegramClient configured with:
     - Infinite reconnection attempts on network jitter / drops (connection_retries=None)
-    - Short retry delay (2 seconds)
-    - Socket level timeout (20s)
+    - Ultra-fast retry delay (0.01s / 10ms)
+    - Socket level timeout (10s)
     - RPC request retries (5)
     """
     return TelegramClient(
@@ -46,9 +46,9 @@ def build_telegram_client(session_target) -> TelegramClient:
         API_ID,
         API_HASH,
         connection_retries=None,
-        retry_delay=2,
+        retry_delay=0.01,
         auto_reconnect=True,
-        timeout=20,
+        timeout=10,
         request_retries=5
     )
 

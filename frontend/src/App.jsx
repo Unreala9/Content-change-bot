@@ -296,7 +296,7 @@ export default function App() {
     };
 
     loadAllData();
-    const intervalId = window.setInterval(loadAllData, 5000);
+    const intervalId = window.setInterval(loadAllData, 1000);
 
     return () => {
       window.clearInterval(intervalId);
