@@ -351,8 +351,12 @@ class MultiUserTelegramManager:
                 return client
 
             except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError) as auth_err:
-                print(f"🚨 [TELEGRAM_SESSION_INVALID] Session invalidated for user {identifier or user_id[:8]}: ({type(auth_err).__name__}) {auth_err}")
-                await self.invalidate_session(user_id, reason=str(auth_err))
+                err_type = type(auth_err).__name__
+                if isinstance(auth_err, AuthKeyDuplicatedError):
+                    print(f"🚨 [TELEGRAM_SESSION_INVALID] AuthKeyDuplicatedError for user {identifier or user_id[:8]}! Conflict detected: Multiple backend processes (e.g. Local PC 'python main.py' and VPS Server) are running simultaneously using the same StringSession!")
+                else:
+                    print(f"🚨 [TELEGRAM_SESSION_INVALID] Session invalidated for user {identifier or user_id[:8]}: ({err_type}) {auth_err}")
+                await self.invalidate_session(user_id, reason=f"{err_type}: {auth_err}")
                 return None
             except Exception as e:
                 print(f"⚠️ Error starting Telegram session for user {identifier or user_id[:8]}: {e}")
