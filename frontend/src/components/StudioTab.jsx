@@ -766,7 +766,9 @@ export default function StudioTab({
             ) : destinationMessages.length === 0 ? (
               <div className="empty-state" style={{ padding: "60px 20px" }}>
                 <i className="fa-solid fa-paper-plane font-24 mb-10" style={{ fontSize: "32px", color: "var(--accent-green)", display: "block", margin: "0 auto 12px" }}></i>
-                <p style={{ fontSize: "12px" }}>Select destination channel to view target chat feed...</p>
+                <p style={{ fontSize: "12px" }}>
+                  {destChannel ? `No forwarded messages recorded yet for ${selectedDest ? selectedDest.name : destChannel}.` : "Select destination channel to view target chat feed..."}
+                </p>
               </div>
             ) : (
               <div className="stream-feed" style={{ maxHeight: "540px", overflowY: "auto", paddingRight: "4px" }}>

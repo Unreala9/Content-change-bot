@@ -466,6 +466,8 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
         return {"success": False, "channels": [], "detail": str(e)}
 
 
+from telethon.tl.types import PeerUser, PeerChat, PeerChannel
+
 async def resolve_telegram_entity(client, channel_id: str):
     if not client or not channel_id:
         return None
@@ -473,18 +475,26 @@ async def resolve_telegram_entity(client, channel_id: str):
     ch_str = str(channel_id).strip()
     clean_id = ch_str.replace("-100", "").replace("-", "").strip()
 
-    # 1. Try direct get_entity with candidate ID & username representations
+    # 1. Try direct get_entity with candidate ID, Peer objects, & username representations
     candidates = []
     if ch_str.startswith("-100"):
         candidates.append(int(ch_str))
+        if clean_id.isdigit():
+            candidates.append(PeerChannel(int(clean_id)))
     elif ch_str.startswith("-"):
         candidates.append(int(ch_str))
         if clean_id.isdigit():
+            candidates.append(PeerChat(int(clean_id)))
+            candidates.append(PeerChannel(int(clean_id)))
             candidates.append(int(f"-100{clean_id}"))
     elif clean_id.isdigit():
+        num_id = int(clean_id)
+        candidates.append(PeerUser(num_id))
+        candidates.append(PeerChat(num_id))
+        candidates.append(PeerChannel(num_id))
         candidates.append(int(f"-100{clean_id}"))
-        candidates.append(int(f"-{clean_id}"))
-        candidates.append(int(clean_id))
+        candidates.append(-num_id)
+        candidates.append(num_id)
     else:
         if not ch_str.startswith("@") and " " not in ch_str:
             candidates.append(f"@{ch_str}")
