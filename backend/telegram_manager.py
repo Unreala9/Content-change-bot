@@ -139,6 +139,8 @@ class MultiUserTelegramManager:
             print(f"[TELEGRAM_LOGIN_REQUIRED] No active Telegram session for User: {user_id[:8]}")
             return None
 
+    get_client_for_user = get_client
+
     async def start(self):
         print("🚀 Starting Central Singleton Telegram Client Manager...")
         if IS_SUPABASE_CONFIGURED:

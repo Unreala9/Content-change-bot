@@ -547,7 +547,7 @@ async def get_messages(
     if not target_channel:
         target_channel = "all"
 
-    client = await telegram_manager.get_client_for_user(user_id)
+    client = await telegram_manager.get_client(user_id)
 
     is_authed = False
     if client and client.is_connected():
