@@ -1,14 +1,16 @@
 import React, { useState } from "react";
 import { getApiUrl } from "../api";
 import { supabase } from "../supabase";
+import ForgotPasswordModal from "./ForgotPasswordModal";
 
-export default function LoginPage({ onLoginSuccess, onContinueDemo }) {
+export default function LoginPage({ onLoginSuccess }) {
   const [authMode, setAuthMode] = useState("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [alert, setAlert] = useState({ type: "", msg: "" });
+  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -92,7 +94,7 @@ export default function LoginPage({ onLoginSuccess, onContinueDemo }) {
             <i className="fa-paper-plane fa-solid"></i>
           </div>
           <h2 style={{ fontSize: "24px", fontWeight: "700", color: "#ffffff" }}>
-            Telegram<span style={{ color: "var(--primary-yellow)" }}>Sync</span> Hub
+            Telegram<span style={{ color: "var(--primary-yellow)" }}>Sync</span> Studio
           </h2>
           <p style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
             Sign in to access your multi-tenant Telegram channel studio
@@ -136,7 +138,18 @@ export default function LoginPage({ onLoginSuccess, onContinueDemo }) {
           </div>
 
           <div style={{ marginBottom: "20px" }}>
-            <label style={{ fontSize: "12px", color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>Password</label>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <label style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>Password</label>
+              {authMode === "signin" && (
+                <button
+                  type="button"
+                  onClick={() => setIsForgotModalOpen(true)}
+                  style={{ background: "none", border: "none", color: "var(--primary-yellow)", fontSize: "12px", cursor: "pointer", padding: 0 }}
+                >
+                  Forgot Password?
+                </button>
+              )}
+            </div>
             <div style={{ position: "relative" }}>
               <input
                 type={showPassword ? "text" : "password"}
@@ -165,14 +178,10 @@ export default function LoginPage({ onLoginSuccess, onContinueDemo }) {
           </button>
         </form>
 
-        <button
-          type="button"
-          className="btn btn-outline w-100 mt-15"
-          style={{ width: "100%", marginTop: "16px" }}
-          onClick={onContinueDemo}
-        >
-          <i className="fa-solid fa-play"></i> Continue in Local Studio Mode
-        </button>
+        <ForgotPasswordModal
+          isOpen={isForgotModalOpen}
+          onClose={() => setIsForgotModalOpen(false)}
+        />
       </div>
     </div>
   );

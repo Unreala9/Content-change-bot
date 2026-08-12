@@ -10,6 +10,7 @@ import ChannelsTab from "./components/ChannelsTab";
 import PricingTab from "./components/PricingTab";
 import AuthModal from "./components/AuthModal";
 import LoginPage from "./components/LoginPage";
+import ResetPasswordPage from "./components/ResetPasswordPage";
 import Toast from "./components/Toast";
 
 export default function App() {
@@ -19,6 +20,9 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [showLoginPage, setShowLoginPage] = useState(false);
+  const [isResetPasswordView, setIsResetPasswordView] = useState(
+    window.location.pathname === "/reset-password" || window.location.hash.includes("type=recovery")
+  );
 
   const [sourceMessages, setSourceMessages] = useState([]);
   const [destinationMessages, setDestinationMessages] = useState([]);
@@ -32,6 +36,10 @@ export default function App() {
   const activeDestIdRef = useRef(activeDestId);
   const sourceRequestIdRef = useRef(0);
   const destRequestIdRef = useRef(0);
+
+  const sourceAbortRef = useRef(null);
+  const destAbortRef = useRef(null);
+  const isPollingRef = useRef(false);
 
   useEffect(() => { activeSourceIdRef.current = activeSourceId; }, [activeSourceId]);
   useEffect(() => { activeDestIdRef.current = activeDestId; }, [activeDestId]);
@@ -55,6 +63,11 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
 
+    // Detect recovery link hash
+    if (window.location.hash.includes("type=recovery")) {
+      setIsResetPasswordView(true);
+    }
+
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
       const s = data.session;
@@ -69,9 +82,14 @@ export default function App() {
       if (mounted) setAuthLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
+
+      if (event === "PASSWORD_RECOVERY") {
+        setIsResetPasswordView(true);
+      }
+
       if (newSession?.access_token) {
         localStorage.setItem("sb_access_token", newSession.access_token);
         setShowLoginPage(false);
@@ -128,11 +146,12 @@ export default function App() {
     }
   }, [session?.access_token, showLoginPage]);
 
-  const fetchChannels = async () => {
+  const fetchChannels = async (forceRefresh = false) => {
     try {
       const token = localStorage.getItem("sb_access_token") || session?.access_token;
       if (!token) return;
-      const res = await authFetch("/api/channels");
+      const url = `/api/channels${forceRefresh ? "?refresh=true" : ""}`;
+      const res = await authFetch(url);
       if (res.status === 401) {
         setShowLoginPage(true);
         return;
@@ -165,15 +184,19 @@ export default function App() {
       }
 
       if (!targetId || targetId === "undefined" || targetId === "null") {
-        console.info("[SOURCE FETCH] Skipped: Invalid channel ID.");
         return;
       }
+
+      if (sourceAbortRef.current) {
+        sourceAbortRef.current.abort();
+      }
+      sourceAbortRef.current = new AbortController();
 
       const requestId = ++sourceRequestIdRef.current;
       const requestedChannelId = String(targetId);
 
       const url = `/api/messages?channel_id=${encodeURIComponent(requestedChannelId)}`;
-      const res = await authFetch(url);
+      const res = await authFetch(url, { signal: sourceAbortRef.current.signal });
       if (res.status === 401) { setShowLoginPage(true); return; }
       const data = await res.json();
 
@@ -190,7 +213,9 @@ export default function App() {
         setSourceMessages(data.messages);
       }
     } catch (err) {
-      console.error("[SOURCE FETCH] Request failed:", err);
+      if (err.name !== "AbortError") {
+        console.error("[SOURCE FETCH] Request failed:", err);
+      }
     }
   };
 
@@ -212,11 +237,16 @@ export default function App() {
         return;
       }
 
+      if (destAbortRef.current) {
+        destAbortRef.current.abort();
+      }
+      destAbortRef.current = new AbortController();
+
       const requestId = ++destRequestIdRef.current;
       const requestedChannelId = String(targetId);
 
       const url = `/api/messages?channel_id=${encodeURIComponent(requestedChannelId)}`;
-      const res = await authFetch(url);
+      const res = await authFetch(url, { signal: destAbortRef.current.signal });
       if (res.status === 401) { setShowLoginPage(true); return; }
       const data = await res.json();
 
@@ -233,23 +263,36 @@ export default function App() {
         setDestinationMessages(data.messages);
       }
     } catch (err) {
-      console.error("[DEST FETCH] Request failed:", err);
+      if (err.name !== "AbortError") {
+        console.error("[DEST FETCH] Request failed:", err);
+      }
     }
   };
 
-  // Controlled Polling Interval
+  // Controlled Non-Overlapping Polling Loop
   useEffect(() => {
     if (!session || authLoading || showLoginPage || !settingsLoaded) return;
 
     const loadAllData = async () => {
-      await fetchStatus();
-      await fetchChannels();
+      if (isPollingRef.current || document.hidden) {
+        return;
+      }
+      isPollingRef.current = true;
 
-      const currentSrc = activeSourceIdRef.current || "all";
-      const currentDest = activeDestIdRef.current || "";
+      try {
+        await fetchStatus();
+        await fetchChannels(false);
 
-      if (currentSrc) await fetchSourceMessages(currentSrc);
-      if (currentDest) await fetchDestinationMessages(currentDest);
+        const currentSrc = activeSourceIdRef.current || "all";
+        const currentDest = activeDestIdRef.current || "";
+
+        if (currentSrc) await fetchSourceMessages(currentSrc);
+        if (currentDest) await fetchDestinationMessages(currentDest);
+      } catch (e) {
+        console.warn("[POLLING] Cycle error:", e);
+      } finally {
+        isPollingRef.current = false;
+      }
     };
 
     loadAllData();
@@ -258,7 +301,7 @@ export default function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [session?.access_token, authLoading, showLoginPage, settingsLoaded, activeSourceId, activeDestId]);
+  }, [session?.access_token, authLoading, showLoginPage, settingsLoaded]);
 
   const handleSaveRules = async (payload) => {
     try {
@@ -289,12 +332,18 @@ export default function App() {
   };
 
   const handleLogoutUser = async () => {
+    if (sourceAbortRef.current) sourceAbortRef.current.abort();
+    if (destAbortRef.current) destAbortRef.current.abort();
+
     localStorage.removeItem("sb_access_token");
     setSession(null);
     setShowLoginPage(true);
     setSettingsLoaded(false);
     setActiveSourceId(null);
     setActiveDestId(null);
+    setChannels([]);
+    setSourceMessages([]);
+    setDestinationMessages([]);
     await supabase.auth.signOut().catch(() => {});
   };
 
@@ -317,14 +366,30 @@ export default function App() {
     }
   };
 
+  // 1. Loading Splash Screen
   if (authLoading) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#090d16", color: "#ffffff" }}>
-        <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: "32px", color: "var(--primary-blue)" }}></i>
+      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#090d16", color: "#ffffff", gap: "16px" }}>
+        <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: "36px", color: "var(--primary-yellow)" }}></i>
+        <span style={{ fontSize: "14px", color: "var(--text-muted)", letterSpacing: "0.5px" }}>Checking session & security gate...</span>
       </div>
     );
   }
 
+  // 2. Password Recovery View
+  if (isResetPasswordView) {
+    return (
+      <ResetPasswordPage
+        onResetComplete={() => {
+          setIsResetPasswordView(false);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          fetchStatus();
+        }}
+      />
+    );
+  }
+
+  // 3. Unauthenticated Login Gate
   if (showLoginPage || !session) {
     return (
       <LoginPage
@@ -334,13 +399,11 @@ export default function App() {
             if (data.session) setSession(data.session);
           });
         }}
-        onContinueDemo={() => {
-          setShowLoginPage(false);
-        }}
       />
     );
   }
 
+  // 4. Authenticated Dashboard Layout
   return (
     <div className="app-container">
       <Sidebar
@@ -358,7 +421,7 @@ export default function App() {
           onOpenLogin={() => setIsAuthModalOpen(true)}
           onRefresh={() => {
             fetchStatus();
-            fetchChannels();
+            fetchChannels(true);
             if (activeSourceId) fetchSourceMessages(activeSourceId);
             if (activeDestId) fetchDestinationMessages(activeDestId);
           }}
@@ -378,7 +441,7 @@ export default function App() {
             onOpenLogin={() => setIsAuthModalOpen(true)}
             onRefresh={() => {
               fetchStatus();
-              fetchChannels();
+              fetchChannels(true);
               if (activeSourceId) fetchSourceMessages(activeSourceId);
               if (activeDestId) fetchDestinationMessages(activeDestId);
             }}
@@ -398,7 +461,7 @@ export default function App() {
         {activeTab === "tab-channels" && (
           <ChannelsTab
             channels={channels}
-            onFetchChannels={fetchChannels}
+            onFetchChannels={() => fetchChannels(true)}
             status={status}
             onOpenLogin={() => setIsAuthModalOpen(true)}
           />

@@ -416,57 +416,19 @@ async def logout_telegram(current_user: dict = Depends(get_current_user)):
 user_channels_cache: Dict[str, List[dict]] = {}
 
 @app.get("/api/channels")
-async def get_channels(current_user: dict = Depends(get_current_user)):
+async def get_channels(
+    refresh: bool = False,
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["id"]
-    client = await telegram_manager.get_client(user_id)
-
-    if not client or not client.is_connected():
-        cached = user_channels_cache.get(user_id, [])
-        return {
-            "success": bool(cached),
-            "channels": cached,
-            "requires_login": True,
-            "detail": "Telegram client not active for user."
-        }
-
     try:
-        if not await client.is_user_authorized():
-            await telegram_manager.invalidate_session(user_id, reason="Not authorized in get_channels")
-            return {
-                "success": False,
-                "channels": [],
-                "requires_login": True,
-                "detail": "Telegram session expired or not authorized."
-            }
-
-        dialogs = await client.get_dialogs(limit=200)
-        channels = []
-        for d in dialogs:
-            chat_type = "user"
-            if d.is_channel:
-                chat_type = "channel"
-            elif d.is_group:
-                chat_type = "group"
-
-            display_name = d.name or getattr(d.entity, "title", None) or getattr(d.entity, "first_name", None) or f"Chat {d.id}"
-
-            channels.append({
-                "id": str(d.id),
-                "name": display_name,
-                "type": chat_type,
-                "unread_count": getattr(d, "unread_count", 0)
-            })
-
-        user_channels_cache[user_id] = channels
+        channels = await telegram_manager.get_user_dialogs(user_id, force_refresh=refresh)
         return {"success": True, "channels": channels, "requires_login": False}
     except Exception as e:
         print(f"❌ Error fetching channels for user {user_id[:8]}: {e}")
         if isinstance(e, (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
             await telegram_manager.invalidate_session(user_id, reason=str(e))
             return {"success": False, "channels": [], "requires_login": True, "detail": str(e)}
-        cached = user_channels_cache.get(user_id, [])
-        if cached:
-            return {"success": True, "channels": cached, "detail": f"Using cached dialogs ({e})"}
         return {"success": False, "channels": [], "detail": str(e)}
 
 
