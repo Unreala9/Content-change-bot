@@ -404,6 +404,9 @@ class MultiUserTelegramManager:
 
                         if reply_msg:
                             reply_text = reply_msg.raw_text or reply_msg.message or ""
+                            if not reply_text and reply_msg.media:
+                                media_kind = "VIDEO" if getattr(reply_msg, "video", None) else ("PHOTO" if getattr(reply_msg, "photo", None) else ("DOCUMENT" if getattr(reply_msg, "document", None) else "MEDIA"))
+                                reply_text = f"[{media_kind}]"
                             if reply_msg.sender:
                                 reply_sender = getattr(reply_msg.sender, "first_name", "") or getattr(reply_msg.sender, "title", "") or getattr(reply_msg.sender, "username", "") or str(reply_msg.sender_id)
                             elif reply_msg.sender_id:
@@ -499,16 +502,19 @@ class MultiUserTelegramManager:
                             # Always attach clean transformed text, with fallback quote header if native reply ID isn't linked
                             message_to_send = transformed_text
                             if is_reply and not dest_reply_to_id:
+                                header = ""
                                 if reply_text:
                                     snippet = reply_text.strip().replace('\n', ' ')
                                     if len(snippet) > 70:
                                         snippet = snippet[:67] + "..."
                                     header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n\n"
-                                elif reply_to_msg_id:
+                                elif transformed_text and reply_to_msg_id:
                                     header = f"↪ Replying to message #{reply_to_msg_id}\n\n"
+
+                                if header:
+                                    message_to_send = f"{header}{transformed_text}".strip()
                                 else:
-                                    header = "↪ [Reply Message]\n\n"
-                                message_to_send = f"{header}{transformed_text}"
+                                    message_to_send = transformed_text
 
                             # Safe send with FloodWait protection & native Telegram reply linking
                             sent_msg = None

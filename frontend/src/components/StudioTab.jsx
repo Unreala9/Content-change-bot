@@ -1,5 +1,39 @@
 import React, { useState, useEffect, useRef } from "react";
 
+const formatLocalDate = (dateStr) => {
+  if (!dateStr) return "";
+  try {
+    let raw = String(dateStr).trim();
+    if (!raw.endsWith("Z") && !raw.includes("+") && !raw.includes("T")) {
+      raw = raw.replace(" ", "T") + "Z";
+    }
+    const dateObj = new Date(raw);
+    if (isNaN(dateObj.getTime())) return dateStr;
+
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    const hours = String(dateObj.getHours()).padStart(2, '0');
+    const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+    const seconds = String(dateObj.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  } catch (e) {
+    return dateStr;
+  }
+};
+
+const cleanDisplayMessage = (msgText) => {
+  if (!msgText) return "";
+  if (String(msgText).startsWith("↪ Replying to")) {
+    const parts = String(msgText).split("\n\n");
+    if (parts.length > 1) {
+      return parts.slice(1).join("\n\n").trim();
+    }
+    return "";
+  }
+  return msgText;
+};
+
 export default function StudioTab({
   status,
   channels,
@@ -471,7 +505,7 @@ export default function StudioTab({
                       <span style={{ fontWeight: "700", color: "#ffffff", fontSize: "12px" }}>
                         <i className="fa-regular fa-square"></i> {m.chat_name}
                       </span>
-                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{m.date}</span>
+                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{formatLocalDate(m.date)}</span>
                     </div>
 
                     <div className="msg-body" style={{ fontSize: "13px", fontWeight: "600", color: "#ffffff", margin: "8px 0", lineHeight: "1.4" }}>
@@ -822,7 +856,7 @@ export default function StudioTab({
                       <strong style={{ color: "var(--accent-green)", fontSize: "12px" }}>
                         <i className="fa-solid fa-circle-check"></i> {selectedDest ? selectedDest.name : "Destination Feed"}
                       </strong>
-                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{m.date}</span>
+                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{formatLocalDate(m.date)}</span>
                     </div>
 
                     <div className="msg-body" style={{ fontSize: "13px", fontWeight: "600", color: "#ffffff", margin: "8px 0", lineHeight: "1.4" }}>
@@ -846,7 +880,7 @@ export default function StudioTab({
                           </span>
                         </div>
                       )}
-                      {m.transformed_message || m.raw_message || (
+                      {cleanDisplayMessage(m.transformed_message || m.raw_message) || (
                         <span style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "12px" }}>
                           (Media Attachment Forwarded)
                         </span>
