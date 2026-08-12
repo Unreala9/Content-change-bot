@@ -484,18 +484,26 @@ class MultiUserTelegramManager:
                             dest_reply_to_id = None
                             if is_reply and reply_to_msg_id:
                                 dest_reply_to_id = get_dest_msg_id(user_id, reply_to_msg_id)
-                                # Auto-match fallback: if parent was posted before bot restart, match by content in destination
-                                if not dest_reply_to_id and reply_text:
+                                # Auto-match fallback: if parent was posted before bot restart, match by content or recent media in destination
+                                if not dest_reply_to_id:
                                     try:
-                                        clean_reply = reply_text.strip()[:50].lower()
                                         dest_history = await client.get_messages(dest_entity, limit=50)
-                                        for dm in dest_history:
-                                            dm_text = (dm.raw_text or dm.message or "").strip().lower()
-                                            if dm_text and (clean_reply in dm_text or dm_text in clean_reply or (len(clean_reply) > 10 and clean_reply[:20] in dm_text)):
-                                                dest_reply_to_id = dm.id
-                                                record_msg_mapping(user_id, reply_to_msg_id, dm.id)
-                                                print(f"🎯 [AUTO-MATCH] Linked reply to existing destination message: ID {dm.id}")
-                                                break
+                                        if reply_text and reply_text.strip() and not reply_text.startswith("["):
+                                            clean_reply = reply_text.strip()[:50].lower()
+                                            for dm in dest_history:
+                                                dm_text = (dm.raw_text or dm.message or "").strip().lower()
+                                                if dm_text and (clean_reply in dm_text or dm_text in clean_reply or (len(clean_reply) > 10 and clean_reply[:20] in dm_text)):
+                                                    dest_reply_to_id = dm.id
+                                                    record_msg_mapping(user_id, reply_to_msg_id, dm.id)
+                                                    print(f"🎯 [AUTO-MATCH] Linked reply by text to destination msg: ID {dm.id}")
+                                                    break
+                                        if not dest_reply_to_id and dest_history:
+                                            for dm in dest_history:
+                                                if dm.media:
+                                                    dest_reply_to_id = dm.id
+                                                    record_msg_mapping(user_id, reply_to_msg_id, dm.id)
+                                                    print(f"🎯 [AUTO-MATCH] Linked media reply to destination media msg: ID {dm.id}")
+                                                    break
                                     except Exception as match_err:
                                         print(f"⚠️ Notice matching parent in destination history: {match_err}")
 
@@ -516,6 +524,17 @@ class MultiUserTelegramManager:
                                 else:
                                     message_to_send = transformed_text
 
+                            # Detect media attributes: Stickers & animated GIFs CANNOT have captions in Telegram API
+                            doc = getattr(event.media, "document", None) if event.media else None
+                            doc_attrs = [type(a).__name__ for a in getattr(doc, "attributes", [])] if doc else []
+                            is_sticker = "DocumentAttributeSticker" in doc_attrs
+                            is_gif = "DocumentAttributeAnimated" in doc_attrs or "DocumentAttributeVideo" in doc_attrs and getattr(doc, "mime_type", "") == "video/mp4" and any(getattr(a, "nosound", False) for a in getattr(doc, "attributes", []))
+
+                            if is_sticker or is_gif:
+                                caption_to_send = None
+                            else:
+                                caption_to_send = message_to_send if message_to_send else None
+
                             # Safe send with FloodWait protection & native Telegram reply linking
                             sent_msg = None
                             for send_attempt in range(3):
@@ -526,10 +545,10 @@ class MultiUserTelegramManager:
                                         sent_msg = await client.send_file(entity=dest_entity, file=custom_image_url, caption=message_to_send, reply_to=dest_reply_to_id)
                                     elif event.media:
                                         try:
-                                            sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=message_to_send, reply_to=dest_reply_to_id)
+                                            sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=caption_to_send, reply_to=dest_reply_to_id)
                                         except Exception as media_err:
-                                            print(f"⚠️ Notice sending media reply failed ({media_err}), sending text fallback...")
-                                            sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
+                                            print(f"⚠️ Notice send_file with caption failed ({media_err}), retrying send_file without caption...")
+                                            sent_msg = await client.send_file(entity=dest_entity, file=event.media, reply_to=dest_reply_to_id)
                                     else:
                                         sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
                                     break
@@ -540,9 +559,9 @@ class MultiUserTelegramManager:
                                     if send_attempt == 2:
                                         raise
                                 except Exception as send_err:
-                                    # Fallback if reply_to ID was rejected by Telegram
+                                    # Retry native send if reply_to ID was rejected by Telegram
                                     if dest_reply_to_id is not None:
-                                        print(f"⚠️ Notice native reply_to failed ({send_err}), retrying without reply_to...")
+                                        print(f"⚠️ Notice native reply_to={dest_reply_to_id} failed ({send_err}), retrying without reply_to...")
                                         dest_reply_to_id = None
                                         continue
                                     raise
