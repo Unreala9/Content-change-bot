@@ -134,6 +134,13 @@ class VerifyRazorpayPaymentRequest(BaseModel):
     user_id: Optional[str] = None
 
 
+def case_insensitive_replace(source_text: str, find_pattern: str, replacement_text: str) -> str:
+    if not find_pattern:
+        return source_text
+    escaped_find = re.escape(find_pattern)
+    return re.sub(escaped_find, lambda m: replacement_text, source_text, flags=re.IGNORECASE)
+
+
 # --- Text Transformation & Filtering Engine ---
 def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str]:
     if not text:
@@ -155,7 +162,7 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
 
     transformed = text
 
-    # Multi-rule replacement
+    # Multi-rule replacement (Case-Insensitive)
     replacement_rules = settings.get("replacement_rules")
     if replacement_rules and isinstance(replacement_rules, list):
         for rule in replacement_rules:
@@ -163,9 +170,9 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
                 f_str = rule.get("find", "")
                 r_str = rule.get("replace", "")
                 if f_str:
-                    transformed = transformed.replace(f_str, r_str)
+                    transformed = case_insensitive_replace(transformed, f_str, r_str)
 
-    # Legacy Find/Replace (comma-separated support)
+    # Legacy / Quick Mode Bulk Find/Replace (comma-separated support, Case-Insensitive)
     find_str = settings.get("find_text", "").strip()
     replace_str = settings.get("replace_text", "").strip()
 
@@ -174,7 +181,7 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
         replace_list = [r.strip() for r in replace_str.split(",")]
         for idx, target in enumerate(find_list):
             rep = replace_list[idx] if idx < len(replace_list) else (replace_list[-1] if replace_list else "")
-            transformed = transformed.replace(target, rep)
+            transformed = case_insensitive_replace(transformed, target, rep)
 
     # Link modification
     url_pattern = r'https?://[^\s]+'
