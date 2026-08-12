@@ -44,6 +44,7 @@ from telegram_manager import (
     get_user_stats,
     update_settings_cache
 )
+from telethon.errors import AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError
 
 # Fix Windows terminal UTF-8 encoding
 if sys.platform.startswith("win"):
@@ -328,10 +329,15 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                     "username": me.username or profile.get("telegram_username") or "",
                     "phone": me.phone or profile.get("telegram_phone") or ""
                 }
+        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError) as auth_err:
+            print(f"🚨 Invalidating duplicate/expired session for user {user_id[:8]}: {auth_err}")
+            await telegram_manager.invalidate_session(user_id, reason=str(auth_err))
+            is_authorized = False
+            tg_user = None
         except Exception as e:
             print(f"Notice inspecting Telegram status for user {user_id[:8]}: {e}")
 
-    if not tg_user and (profile.get("telegram_phone") or profile.get("telegram_first_name")):
+    if not tg_user and is_authorized and (profile.get("telegram_phone") or profile.get("telegram_first_name")):
         tg_user = {
             "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
             "first_name": profile.get("telegram_first_name") or "Telegram User",
@@ -362,14 +368,8 @@ async def get_status(current_user: dict = Depends(get_current_user)):
 
 
 def check_user_has_paid_subscription(user_id: str):
-    if not IS_SUPABASE_CONFIGURED:
-        return True
-    sub = get_user_subscription_from_db(user_id)
-    if sub.get("status") != "active" or sub.get("plan_id") not in ["plan_599", "plan_799"]:
-        raise HTTPException(
-            status_code=402,
-            detail="🔒 Subscription Required: Active Basic Plan (₹599) or Pro Plan (₹799) is required to connect your Telegram account."
-        )
+    # Allow all registered users (Free Tier and Paid Tier) to connect Telegram cleanly
+    return True
 
 
 @app.post("/api/auth/send-code")
@@ -461,6 +461,9 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
         return {"success": True, "channels": channels, "requires_login": False}
     except Exception as e:
         print(f"❌ Error fetching channels for user {user_id[:8]}: {e}")
+        if isinstance(e, (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
+            await telegram_manager.invalidate_session(user_id, reason=str(e))
+            return {"success": False, "channels": [], "requires_login": True, "detail": str(e)}
         cached = user_channels_cache.get(user_id, [])
         if cached:
             return {"success": True, "channels": cached, "detail": f"Using cached dialogs ({e})"}

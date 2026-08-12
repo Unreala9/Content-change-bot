@@ -340,6 +340,8 @@ class MultiUserTelegramManager:
                 # Warm up internal Telethon entity cache safely
                 try:
                     await client.get_dialogs(limit=50)
+                except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError):
+                    raise
                 except Exception as cache_err:
                     print(f"⚠️ Notice warming dialogs cache for {identifier or user_id[:8]}: {cache_err}")
 
