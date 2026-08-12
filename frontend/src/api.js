@@ -7,7 +7,7 @@ export const getApiUrl = (path) => {
 
   const envUrl = import.meta.env.VITE_API_BASE_URL;
   let baseUrl = "";
-  
+
   if (envUrl && envUrl.trim() !== "") {
     baseUrl = envUrl.trim().replace(/\/+$/, "");
   } else if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
@@ -25,11 +25,7 @@ export async function refreshAccessToken() {
   if (!refreshPromise) {
     refreshPromise = supabase.auth.refreshSession().then(({ data, error }) => {
       if (error) {
-        if (error.name === "AuthSessionMissingError" || error.message?.includes("Auth session missing")) {
-          console.info("[AUTH] No active auth session to refresh.");
-        } else {
-          console.warn("[AUTH] Session refresh failed:", error.message || error);
-        }
+        console.error("[AUTH] Session refresh failed:", error);
         return null;
       }
       return data.session?.access_token ?? null;
@@ -79,7 +75,7 @@ export const authFetch = async (url, options = {}, isRetry = false) => {
       } else {
         console.warn(`[AUTH] Session invalid. Clearing local auth state.`);
         localStorage.removeItem("sb_access_token");
-        await supabase.auth.signOut().catch(() => {});
+        await supabase.auth.signOut().catch(() => { });
       }
     }
 

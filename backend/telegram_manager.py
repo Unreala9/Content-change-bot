@@ -13,7 +13,8 @@ from telethon.errors import (
     AuthKeyDuplicatedError,
     AuthKeyUnregisteredError,
     UserDeactivatedError,
-    UnauthorizedError
+    UnauthorizedError,
+    FloodWaitError
 )
 
 from config import API_ID, API_HASH, SESSION_NAME, load_settings
@@ -31,10 +32,67 @@ APP_ENV = os.getenv("APP_ENV", "dev")
 SESSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 
+
+def build_telegram_client(session_target) -> TelegramClient:
+    """
+    Constructs a highly resilient TelegramClient configured with:
+    - Infinite reconnection attempts on network jitter / drops (connection_retries=None)
+    - Short retry delay (2 seconds)
+    - Socket level timeout (20s)
+    - RPC request retries (5)
+    """
+    return TelegramClient(
+        session_target,
+        API_ID,
+        API_HASH,
+        connection_retries=None,
+        retry_delay=2,
+        auto_reconnect=True,
+        timeout=20,
+        request_retries=5
+    )
+
+import json
+
 # In-memory per-user recent message history (max 100 per user)
 user_recent_messages: Dict[str, deque] = {}
 user_stats: Dict[str, Dict[str, int]] = {}
 user_settings_cache: Dict[str, dict] = {}
+
+MSG_MAP_FILE = os.path.join(SESSIONS_DIR, f"msg_map_{APP_ENV}.json")
+
+
+def _load_persisted_msg_map() -> Dict[str, Dict[str, int]]:
+    if os.path.exists(MSG_MAP_FILE):
+        try:
+            with open(MSG_MAP_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+# Mapping of Source Channel Message ID -> Destination Channel Message ID per user
+user_msg_map: Dict[str, Dict[str, int]] = _load_persisted_msg_map()
+
+
+def record_msg_mapping(user_id: str, source_msg_id: int, dest_msg_id: int):
+    if user_id not in user_msg_map:
+        user_msg_map[user_id] = {}
+    m = user_msg_map[user_id]
+    m[str(source_msg_id)] = int(dest_msg_id)
+    if len(m) > 2000:
+        first_key = next(iter(m))
+        del m[first_key]
+    try:
+        with open(MSG_MAP_FILE, "w", encoding="utf-8") as f:
+            json.dump(user_msg_map, f)
+    except Exception:
+        pass
+
+
+def get_dest_msg_id(user_id: str, source_msg_id: int) -> Optional[int]:
+    return user_msg_map.get(user_id, {}).get(str(source_msg_id))
 
 
 def get_cached_settings(user_id: str) -> dict:
@@ -124,7 +182,7 @@ class MultiUserTelegramManager:
                 if not self.local_fallback_client or not self.local_fallback_client.is_connected():
                     session_file = os.path.join(SESSIONS_DIR, f"fallback_{APP_ENV}")
                     print(f"[TELEGRAM_CLIENT_CREATE] Creating local fallback client: {session_file}")
-                    self.local_fallback_client = TelegramClient(session_file, API_ID, API_HASH)
+                    self.local_fallback_client = build_telegram_client(session_file)
                     try:
                         await self.local_fallback_client.connect()
                     except Exception as e:
@@ -148,7 +206,7 @@ class MultiUserTelegramManager:
         else:
             print("💡 Supabase not configured. Operating in Single-User Local Session Mode.")
             session_file = os.path.join(SESSIONS_DIR, f"fallback_{APP_ENV}")
-            self.local_fallback_client = TelegramClient(session_file, API_ID, API_HASH)
+            self.local_fallback_client = build_telegram_client(session_file)
             try:
                 await self.local_fallback_client.connect()
                 self._attach_listener("00000000-0000-0000-0000-000000000000", self.local_fallback_client)
@@ -270,7 +328,7 @@ class MultiUserTelegramManager:
             print(f"[TELEGRAM_CLIENT_CREATE] Creating new StringSession client for User: {identifier or user_id[:8]}")
 
             try:
-                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+                client = build_telegram_client(StringSession(session_str))
                 await client.connect()
 
                 if not await client.is_user_authorized():
@@ -317,6 +375,24 @@ class MultiUserTelegramManager:
                 chat_name = getattr(event.chat, "title", None) or getattr(event.chat, "first_name", "Chat")
                 raw_text = event.raw_text or ""
 
+                # Extract reply information if this message is replying to another message
+                is_reply = bool(event.is_reply)
+                reply_to_msg_id = getattr(event, "reply_to_msg_id", None)
+                reply_text = ""
+                reply_sender = ""
+
+                if is_reply:
+                    try:
+                        reply_msg = await event.get_reply_message()
+                        if reply_msg:
+                            reply_text = reply_msg.raw_text or reply_msg.message or ""
+                            if reply_msg.sender:
+                                reply_sender = getattr(reply_msg.sender, "first_name", "") or getattr(reply_msg.sender, "title", "") or getattr(reply_msg.sender, "username", "") or str(reply_msg.sender_id)
+                            elif reply_msg.sender_id:
+                                reply_sender = str(reply_msg.sender_id)
+                    except Exception as reply_err:
+                        print(f"⚠️ Notice resolving reply context for msg {event.id}: {reply_err}")
+
                 # Filter by Source Channel
                 configured_source = str(settings.get("source_channel_id", "all")).strip()
                 if configured_source and configured_source != "all":
@@ -349,7 +425,11 @@ class MultiUserTelegramManager:
                     "status": "pending",
                     "reason": reason,
                     "webhook_url": settings.get("webhook_url", ""),
-                    "telegram_posted": False
+                    "telegram_posted": False,
+                    "is_reply": is_reply,
+                    "reply_to_msg_id": reply_to_msg_id,
+                    "reply_text": reply_text,
+                    "reply_sender": reply_sender
                 }
 
                 if not should_forward:
@@ -379,34 +459,61 @@ class MultiUserTelegramManager:
                             custom_image_url = settings.get("custom_image_url", "").strip()
                             strip_media = settings.get("strip_media_images", False)
 
-                            is_real_media = bool(
-                                getattr(event, "photo", None) or
-                                getattr(event, "video", None) or
-                                getattr(event, "document", None) or
-                                getattr(event, "audio", None) or
-                                getattr(event, "voice", None)
-                            )
+                            # Resolve native destination reply ID if replying to a known forwarded message
+                            dest_reply_to_id = None
+                            if is_reply and reply_to_msg_id:
+                                dest_reply_to_id = get_dest_msg_id(user_id, reply_to_msg_id)
+                                # Auto-match fallback: if parent was posted before bot restart, match by content in destination
+                                if not dest_reply_to_id and reply_text:
+                                    try:
+                                        clean_reply = reply_text.strip()[:50].lower()
+                                        dest_history = await client.get_messages(dest_entity, limit=50)
+                                        for dm in dest_history:
+                                            dm_text = (dm.raw_text or dm.message or "").strip().lower()
+                                            if dm_text and (clean_reply in dm_text or dm_text in clean_reply or (len(clean_reply) > 10 and clean_reply[:20] in dm_text)):
+                                                dest_reply_to_id = dm.id
+                                                record_msg_mapping(user_id, reply_to_msg_id, dm.id)
+                                                print(f"🎯 [AUTO-MATCH] Linked reply to existing destination message: ID {dm.id}")
+                                                break
+                                    except Exception as match_err:
+                                        print(f"⚠️ Notice matching parent in destination history: {match_err}")
 
-                            if strip_media:
-                                await client.send_message(entity=dest_entity, message=transformed_text)
-                            elif override_image and custom_image_url:
+                            # Always send clean transformed text (never pollute message body with text quotes)
+                            message_to_send = transformed_text
+
+                            # Safe send with FloodWait protection & native Telegram reply linking
+                            sent_msg = None
+                            for send_attempt in range(3):
                                 try:
-                                    await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
-                                except Exception as img_err:
-                                    print(f"⚠️ Custom image send error: {img_err}. Falling back to text.")
-                                    await client.send_message(entity=dest_entity, message=transformed_text)
-                            elif is_real_media and event.media:
-                                try:
-                                    await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
-                                except Exception as media_err:
-                                    print(f"⚠️ Media send error: {media_err}. Falling back to text.")
-                                    await client.send_message(entity=dest_entity, message=transformed_text)
-                            else:
-                                await client.send_message(entity=dest_entity, message=transformed_text)
+                                    if strip_media:
+                                        sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
+                                    elif override_image and custom_image_url:
+                                        sent_msg = await client.send_file(entity=dest_entity, file=custom_image_url, caption=message_to_send, reply_to=dest_reply_to_id)
+                                    elif event.media:
+                                        sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=message_to_send, reply_to=dest_reply_to_id)
+                                    else:
+                                        sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
+                                    break
+                                except FloodWaitError as fwe:
+                                    wait_secs = fwe.seconds + 1
+                                    print(f"⏳ [FloodWait User:{user_id[:8]}] Rate limited. Sleeping {wait_secs}s before retry...")
+                                    await asyncio.sleep(wait_secs)
+                                    if send_attempt == 2:
+                                        raise
+                                except Exception as send_err:
+                                    # Fallback if reply_to ID was rejected by Telegram
+                                    if dest_reply_to_id is not None:
+                                        print(f"⚠️ Notice native reply_to failed ({send_err}), retrying without reply_to...")
+                                        dest_reply_to_id = None
+                                        continue
+                                    raise
+
+                            if sent_msg and hasattr(sent_msg, "id"):
+                                record_msg_mapping(user_id, event.id, sent_msg.id)
 
                             log_item["telegram_posted"] = True
                             stats["forwarded"] += 1
-                            print(f"⚡ [INSTANT RELAY User:{user_id[:8]}] Posted to Telegram destination ({dest_channel_id})")
+                            print(f"⚡ [INSTANT RELAY User:{user_id[:8]}] Posted to Telegram destination ({dest_channel_id}) (reply_to={dest_reply_to_id})")
                         except Exception as tg_err:
                             print(f"⚠️ [User:{user_id[:8]}] Telegram auto-post error: {tg_err}")
                             log_item["telegram_error"] = str(tg_err)
@@ -427,6 +534,10 @@ class MultiUserTelegramManager:
                         "raw_message": raw_text,
                         "date": str(event.date),
                         "sender_id": event.sender_id,
+                        "is_reply": is_reply,
+                        "reply_to_msg_id": reply_to_msg_id,
+                        "reply_text": reply_text,
+                        "reply_sender": reply_sender
                     }
                     loop = asyncio.get_event_loop()
 
@@ -444,6 +555,52 @@ class MultiUserTelegramManager:
         self.attached_listeners.add(user_id)
         print(f"✅ [LISTENER_ATTACH] Listener registered for User: {user_id[:8]}")
 
+    async def connection_watchdog(self):
+        """
+        Active background health-check loop that runs every 30 seconds.
+        Ensures all active sessions remain connected across network glitches and re-attaches listeners.
+        """
+        print("🛡️ [WATCHDOG] Telegram Connection Watchdog started.")
+        while True:
+            try:
+                await asyncio.sleep(30)
+                if not IS_SUPABASE_CONFIGURED:
+                    if self.local_fallback_client:
+                        if not self.local_fallback_client.is_connected():
+                            print("🔄 [WATCHDOG] Reconnecting local fallback client...")
+                            try:
+                                await self.local_fallback_client.connect()
+                                print("✅ [WATCHDOG] Local fallback client reconnected!")
+                            except Exception as e:
+                                print(f"⚠️ [WATCHDOG] Failed to reconnect local fallback: {e}")
+                    continue
+
+                users = get_all_users_with_telegram_sessions()
+                for u in users:
+                    uid = u["id"]
+                    s_str = u.get("telegram_session_string")
+                    if not s_str:
+                        continue
+
+                    client = self.active_clients.get(uid)
+                    if not client or not client.is_connected():
+                        print(f"🔄 [WATCHDOG] Reconnecting dropped client for User: {u.get('email', uid[:8])}...")
+                        try:
+                            if uid in self.attached_listeners:
+                                self.attached_listeners.remove(uid)
+                            await self.start_user_session(uid, s_str, u.get("email", uid))
+                        except Exception as reconn_err:
+                            print(f"⚠️ [WATCHDOG] Reconnect error for {u.get('email', uid[:8])}: {reconn_err}")
+                    elif uid not in self.attached_listeners:
+                        print(f"🔄 [WATCHDOG] Re-attaching missing listener for User: {u.get('email', uid[:8])}...")
+                        self._attach_listener(uid, client)
+
+            except asyncio.CancelledError:
+                print("🛑 [WATCHDOG] Connection Watchdog stopped.")
+                break
+            except Exception as loop_err:
+                print(f"⚠️ [WATCHDOG] Watchdog cycle error: {loop_err}")
+
     async def send_auth_code(self, user_id: str, phone_number: str) -> dict:
         # Clean up any existing pending login client for this user first
         if user_id in self.pending_logins:
@@ -455,7 +612,7 @@ class MultiUserTelegramManager:
                 except Exception:
                     pass
 
-        client = TelegramClient(StringSession(), API_ID, API_HASH)
+        client = build_telegram_client(StringSession())
         await client.connect()
 
         try:
