@@ -57,19 +57,29 @@ export default function StudioTab({
         }
         channelHydratedRef.current = true;
       }
-      if (status.settings.auto_post_telegram !== undefined) {
-        setAutoPostTg(status.settings.auto_post_telegram);
-      }
-      if (status.settings.auto_post_n8n !== undefined) {
-        setAutoPostN8n(status.settings.auto_post_n8n);
-      }
-      if (status.settings.webhook_url) setWebhookUrl(status.settings.webhook_url);
-      if (status.settings.text_prefix !== undefined) setPrefix(status.settings.text_prefix);
-      if (status.settings.text_suffix !== undefined) setSuffix(status.settings.text_suffix);
-      if (status.settings.find_text !== undefined) setFindText(status.settings.find_text);
-      if (status.settings.replace_text !== undefined) setReplaceText(status.settings.replace_text);
-      if (!rulesHydratedRef.current && Array.isArray(status.settings.replacement_rules)) {
-        if (status.settings.replacement_rules.length > 0) {
+
+      if (!rulesHydratedRef.current) {
+        if (status.settings.auto_post_telegram !== undefined) {
+          setAutoPostTg(status.settings.auto_post_telegram);
+        }
+        if (status.settings.auto_post_n8n !== undefined) {
+          setAutoPostN8n(status.settings.auto_post_n8n);
+        }
+        if (status.settings.webhook_url) setWebhookUrl(status.settings.webhook_url);
+        if (status.settings.text_prefix !== undefined) setPrefix(status.settings.text_prefix);
+        if (status.settings.text_suffix !== undefined) setSuffix(status.settings.text_suffix);
+        if (status.settings.find_text !== undefined) setFindText(status.settings.find_text);
+        if (status.settings.replace_text !== undefined) setReplaceText(status.settings.replace_text);
+        if (status.settings.override_all_links !== undefined) setOverrideLinks(status.settings.override_all_links);
+        if (status.settings.custom_link_url !== undefined) setCustomUrl(status.settings.custom_link_url);
+        if (status.settings.remove_all_links !== undefined) setRemoveLinks(status.settings.remove_all_links);
+        if (status.settings.override_media_image !== undefined) setOverrideImage(status.settings.override_media_image);
+        if (status.settings.custom_image_url !== undefined) setCustomImageUrl(status.settings.custom_image_url);
+        if (status.settings.strip_media_images !== undefined) setStripMedia(status.settings.strip_media_images);
+        if (status.settings.filter_mode !== undefined) setFilterMode(status.settings.filter_mode);
+        if (status.settings.keyword_filter !== undefined) setKeywordFilter(status.settings.keyword_filter);
+
+        if (Array.isArray(status.settings.replacement_rules) && status.settings.replacement_rules.length > 0) {
           setIndividualRules(status.settings.replacement_rules.map((r, idx) => ({
             id: r.id || idx + 1,
             find: r.find || "",
@@ -351,7 +361,10 @@ export default function StudioTab({
             <span style={{ fontSize: "12px", lineHeight: "1.4" }}>
               {status?.session_expired ? (
                 <>
-                  <strong>Session Key Revoked for {status?.user?.first_name || "HITESH"} ({status?.user?.phone || "+919049629140"}):</strong> Re-enter 5-digit Telegram login code to issue a fresh active session key.
+                  <strong>
+                    Session Key Revoked{status?.user?.first_name ? ` for ${status.user.first_name}` : ""}{status?.user?.phone ? ` (${status.user.phone})` : ""}:
+                  </strong>{" "}
+                  Re-enter 5-digit Telegram login code to issue a fresh active session key.
                 </>
               ) : (
                 <>
@@ -833,7 +846,17 @@ export default function StudioTab({
                           </span>
                         </div>
                       )}
-                      {m.transformed_message || m.raw_message}
+                      {m.transformed_message || m.raw_message || (
+                        <span style={{ fontStyle: "italic", color: "var(--text-muted)", fontSize: "12px" }}>
+                          (Media Attachment Forwarded)
+                        </span>
+                      )}
+                      {(m.has_media || m.media_type) && (
+                        <div style={{ marginTop: "6px", display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(16, 185, 129, 0.15)", color: "var(--accent-green)", border: "1px solid rgba(16, 185, 129, 0.3)", borderRadius: "6px", padding: "2px 8px", fontSize: "11px" }}>
+                          <i className={m.media_type === "video" ? "fa-solid fa-video" : (m.media_type === "photo" ? "fa-solid fa-image" : "fa-solid fa-paperclip")}></i>
+                          <span>{m.media_type ? m.media_type.toUpperCase() : "MEDIA ATTACHMENT"}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", justifyContent: "flex-start", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>

@@ -340,6 +340,8 @@ class MultiUserTelegramManager:
                 # Warm up internal Telethon entity cache safely
                 try:
                     await client.get_dialogs(limit=50)
+                except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError):
+                    raise
                 except Exception as cache_err:
                     print(f"⚠️ Notice warming dialogs cache for {identifier or user_id[:8]}: {cache_err}")
 
@@ -349,8 +351,12 @@ class MultiUserTelegramManager:
                 return client
 
             except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError) as auth_err:
-                print(f"🚨 [TELEGRAM_SESSION_INVALID] Session invalidated for user {identifier or user_id[:8]}: ({type(auth_err).__name__}) {auth_err}")
-                await self.invalidate_session(user_id, reason=str(auth_err))
+                err_type = type(auth_err).__name__
+                if isinstance(auth_err, AuthKeyDuplicatedError):
+                    print(f"🚨 [TELEGRAM_SESSION_INVALID] AuthKeyDuplicatedError for user {identifier or user_id[:8]}! Conflict detected: Multiple backend processes (e.g. Local PC 'python main.py' and VPS Server) are running simultaneously using the same StringSession!")
+                else:
+                    print(f"🚨 [TELEGRAM_SESSION_INVALID] Session invalidated for user {identifier or user_id[:8]}: ({err_type}) {auth_err}")
+                await self.invalidate_session(user_id, reason=f"{err_type}: {auth_err}")
                 return None
             except Exception as e:
                 print(f"⚠️ Error starting Telegram session for user {identifier or user_id[:8]}: {e}")
@@ -375,15 +381,27 @@ class MultiUserTelegramManager:
                 chat_name = getattr(event.chat, "title", None) or getattr(event.chat, "first_name", "Chat")
                 raw_text = event.raw_text or ""
 
-                # Extract reply information if this message is replying to another message
-                is_reply = bool(event.is_reply)
+                # Robustly extract reply information across all Telethon versions
+                reply_header = getattr(event, "reply_to", None) or (getattr(event, "message", None) and getattr(event.message, "reply_to", None))
+                is_reply = bool(event.is_reply or reply_header)
+                
                 reply_to_msg_id = getattr(event, "reply_to_msg_id", None)
+                if not reply_to_msg_id and reply_header:
+                    reply_to_msg_id = getattr(reply_header, "reply_to_msg_id", None)
+
                 reply_text = ""
                 reply_sender = ""
 
                 if is_reply:
                     try:
                         reply_msg = await event.get_reply_message()
+                        if not reply_msg and reply_to_msg_id:
+                            try:
+                                chat_target = getattr(event, "input_chat", None) or event.chat_id
+                                reply_msg = await client.get_messages(chat_target, ids=reply_to_msg_id)
+                            except Exception as get_msg_err:
+                                print(f"⚠️ Notice fetching parent message #{reply_to_msg_id}: {get_msg_err}")
+
                         if reply_msg:
                             reply_text = reply_msg.raw_text or reply_msg.message or ""
                             if reply_msg.sender:
@@ -478,8 +496,19 @@ class MultiUserTelegramManager:
                                     except Exception as match_err:
                                         print(f"⚠️ Notice matching parent in destination history: {match_err}")
 
-                            # Always send clean transformed text (never pollute message body with text quotes)
+                            # Always attach clean transformed text, with fallback quote header if native reply ID isn't linked
                             message_to_send = transformed_text
+                            if is_reply and not dest_reply_to_id:
+                                if reply_text:
+                                    snippet = reply_text.strip().replace('\n', ' ')
+                                    if len(snippet) > 70:
+                                        snippet = snippet[:67] + "..."
+                                    header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n\n"
+                                elif reply_to_msg_id:
+                                    header = f"↪ Replying to message #{reply_to_msg_id}\n\n"
+                                else:
+                                    header = "↪ [Reply Message]\n\n"
+                                message_to_send = f"{header}{transformed_text}"
 
                             # Safe send with FloodWait protection & native Telegram reply linking
                             sent_msg = None
@@ -490,7 +519,11 @@ class MultiUserTelegramManager:
                                     elif override_image and custom_image_url:
                                         sent_msg = await client.send_file(entity=dest_entity, file=custom_image_url, caption=message_to_send, reply_to=dest_reply_to_id)
                                     elif event.media:
-                                        sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=message_to_send, reply_to=dest_reply_to_id)
+                                        try:
+                                            sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=message_to_send, reply_to=dest_reply_to_id)
+                                        except Exception as media_err:
+                                            print(f"⚠️ Notice sending media reply failed ({media_err}), sending text fallback...")
+                                            sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
                                     else:
                                         sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
                                     break
@@ -602,91 +635,165 @@ class MultiUserTelegramManager:
                 print(f"⚠️ [WATCHDOG] Watchdog cycle error: {loop_err}")
 
     async def send_auth_code(self, user_id: str, phone_number: str) -> dict:
-        # Clean up any existing pending login client for this user first
-        if user_id in self.pending_logins:
-            old_pending = self.pending_logins.pop(user_id)
-            old_client = old_pending.get("client")
-            if old_client and old_client.is_connected():
-                try:
-                    await old_client.disconnect()
-                except Exception:
-                    pass
+        async with self._get_user_lock(user_id):
+            # Reuse existing connected client for pending login if phone matches
+            pending = self.pending_logins.get(user_id)
+            if pending and pending.get("phone") == phone_number and pending.get("client") and pending["client"].is_connected():
+                client = pending["client"]
+            else:
+                if pending and pending.get("client"):
+                    try:
+                        if pending["client"].is_connected():
+                            await pending["client"].disconnect()
+                    except Exception:
+                        pass
 
-        client = build_telegram_client(StringSession())
-        await client.connect()
+                client = build_telegram_client(StringSession())
+                await client.connect()
 
-        try:
-            res = await client.send_code_request(phone_number)
-            self.pending_logins[user_id] = {
-                "client": client,
-                "phone": phone_number,
-                "phone_code_hash": res.phone_code_hash
-            }
-            print(f"[TELEGRAM_CLIENT_CREATE] Created pending auth code client for User: {user_id[:8]}")
-            return {"success": True, "message": "Verification code sent to your Telegram app!"}
-        except Exception as e:
-            if client.is_connected():
-                await client.disconnect()
-            raise Exception(str(e))
+            try:
+                res = await client.send_code_request(phone_number)
+                self.pending_logins[user_id] = {
+                    "client": client,
+                    "phone": phone_number,
+                    "phone_code_hash": res.phone_code_hash
+                }
+                print(f"[TELEGRAM_OTP_SENT] Created pending auth code client for User: {user_id[:8]}")
+                return {
+                    "success": True,
+                    "message": "Verification code sent to your Telegram app!",
+                    "phone_code_hash": res.phone_code_hash
+                }
+            except FloodWaitError as fwe:
+                if client.is_connected():
+                    await client.disconnect()
+                if user_id in self.pending_logins:
+                    del self.pending_logins[user_id]
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Telegram rate limit: Please wait {fwe.seconds} seconds before requesting another code."
+                )
+            except Exception as e:
+                if client.is_connected():
+                    await client.disconnect()
+                if user_id in self.pending_logins:
+                    del self.pending_logins[user_id]
+                raise HTTPException(status_code=400, detail=str(e))
 
     async def verify_auth_code(self, user_id: str, phone_number: str, code: str, password: Optional[str] = None) -> dict:
-        pending = self.pending_logins.get(user_id)
-        if not pending or pending.get("phone") != phone_number:
-            client = await self.get_client(user_id)
-            if not client:
-                raise Exception("No active Telegram connection request found. Please resend phone code.")
+        async with self._get_user_lock(user_id):
+            pending = self.pending_logins.get(user_id)
+            if not pending or pending.get("phone") != phone_number:
+                client = await self.get_client(user_id)
+                if not client:
+                    raise HTTPException(status_code=400, detail="No active Telegram connection request found. Please resend phone code.")
+            else:
+                client = pending["client"]
+
+            try:
+                phone_code_hash = pending.get("phone_code_hash") if pending else None
+                try:
+                    await client.sign_in(
+                        phone=phone_number,
+                        code=code,
+                        phone_code_hash=phone_code_hash
+                    )
+                except SessionPasswordNeededError:
+                    if not password:
+                        raise HTTPException(status_code=401, detail="2FA Password required")
+                    await client.sign_in(password=password)
+
+                me = await client.get_me()
+                session_string = client.session.save()
+
+                if IS_SUPABASE_CONFIGURED:
+                    update_user_profile_in_db(user_id, {
+                        "telegram_session_string": session_string,
+                        "telegram_phone": phone_number,
+                        "telegram_first_name": me.first_name,
+                        "telegram_username": me.username or ""
+                    })
+
+                self._attach_listener(user_id, client)
+                self.active_clients[user_id] = client
+                if user_id in self.pending_logins:
+                    del self.pending_logins[user_id]
+
+                print(f"✅ [TELEGRAM_CLIENT_CREATE] Auth successful for User: {user_id[:8]} ({me.first_name})")
+                return {
+                    "success": True,
+                    "user": {
+                        "id": me.id,
+                        "first_name": me.first_name,
+                        "username": me.username or "",
+                        "phone": me.phone or phone_number
+                    }
+                }
+
+            except SessionPasswordNeededError:
+                raise HTTPException(status_code=401, detail="2FA Password required")
+            except PhoneCodeInvalidError:
+                raise HTTPException(status_code=400, detail="Invalid verification code entered.")
+            except FloodWaitError as fwe:
+                raise HTTPException(status_code=429, detail=f"Telegram rate limit: Please wait {fwe.seconds} seconds.")
+            except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError) as auth_err:
+                await self.invalidate_session(user_id, reason=str(auth_err))
+                raise HTTPException(status_code=401, detail="Telegram session invalidated during login. Please try again.")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+    async def get_user_dialogs(self, user_id: str, force_refresh: bool = False) -> List[dict]:
+        """
+        Retrieves user channels/dialogs with a 60-second in-memory TTL cache.
+        Prevents hitting Telegram RPC get_dialogs on every dashboard render or polling interval.
+        """
+        now = datetime.now().timestamp()
+        if hasattr(self, "user_dialogs_cache"):
+            cached = self.user_dialogs_cache.get(user_id)
+            if not force_refresh and cached and (now - cached.get("timestamp", 0) < 60):
+                print(f"[TELEGRAM_DIALOGS_CACHE] Returning cached dialogs for User: {user_id[:8]}")
+                return cached.get("channels", [])
         else:
-            client = pending["client"]
+            self.user_dialogs_cache = {}
+
+        client = await self.get_client(user_id)
+        if not client or not client.is_connected():
+            cached = self.user_dialogs_cache.get(user_id) if hasattr(self, "user_dialogs_cache") else None
+            return cached.get("channels", []) if cached else []
 
         try:
-            phone_code_hash = pending.get("phone_code_hash") if pending else None
-            try:
-                await client.sign_in(
-                    phone=phone_number,
-                    code=code,
-                    phone_code_hash=phone_code_hash
-                )
-            except SessionPasswordNeededError:
-                if not password:
-                    raise SessionPasswordNeededError("2FA Password required")
-                await client.sign_in(password=password)
+            if not await client.is_user_authorized():
+                await self.invalidate_session(user_id, reason="Not authorized in get_user_dialogs")
+                return []
 
-            me = await client.get_me()
-            session_string = client.session.save()
+            dialogs = await client.get_dialogs(limit=200)
+            channels = []
+            for d in dialogs:
+                chat_type = "user"
+                if d.is_channel:
+                    chat_type = "channel"
+                elif d.is_group:
+                    chat_type = "group"
 
-            if IS_SUPABASE_CONFIGURED:
-                update_user_profile_in_db(user_id, {
-                    "telegram_session_string": session_string,
-                    "telegram_phone": phone_number,
-                    "telegram_first_name": me.first_name,
-                    "telegram_username": me.username or ""
+                display_name = d.name or getattr(d.entity, "title", None) or getattr(d.entity, "first_name", None) or f"Chat {d.id}"
+                channels.append({
+                    "id": str(d.id),
+                    "name": display_name,
+                    "type": chat_type,
+                    "unread_count": getattr(d, "unread_count", 0)
                 })
 
-            self._attach_listener(user_id, client)
-            self.active_clients[user_id] = client
-            if user_id in self.pending_logins:
-                del self.pending_logins[user_id]
-
-            print(f"✅ [TELEGRAM_CLIENT_CREATE] Auth successful for User: {user_id[:8]} ({me.first_name})")
-            return {
-                "success": True,
-                "user": {
-                    "id": me.id,
-                    "first_name": me.first_name,
-                    "username": me.username or "",
-                    "phone": me.phone or phone_number
-                }
+            self.user_dialogs_cache[user_id] = {
+                "channels": channels,
+                "timestamp": now
             }
-
-        except SessionPasswordNeededError:
-            raise Exception("2FA Password required")
-        except PhoneCodeInvalidError:
-            raise Exception("Invalid verification code entered.")
-        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError) as auth_err:
-            await self.invalidate_session(user_id, reason=str(auth_err))
-            raise Exception("Telegram session invalidated during login. Please try again.")
+            return channels
         except Exception as e:
-            raise Exception(str(e))
+            print(f"❌ Error fetching dialogs for user {user_id[:8]}: {e}")
+            if isinstance(e, (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
+                await self.invalidate_session(user_id, reason=str(e))
+            cached = self.user_dialogs_cache.get(user_id) if hasattr(self, "user_dialogs_cache") else None
+            return cached.get("channels", []) if cached else []
 
     async def logout_user(self, user_id: str) -> dict:
         return await self.invalidate_session(user_id, reason="User requested logout")

@@ -3,10 +3,11 @@ import { authFetch } from "../api";
 
 export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
   const [step, setStep] = useState(1);
-  const [phone, setPhone] = useState(status?.user?.phone || "+919049629140");
+  const [phone, setPhone] = useState(status?.user?.phone || "");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusText, setStatusText] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
@@ -22,6 +23,7 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
     if (!phone.trim()) return setErrorMsg("Please enter phone number (+91...)");
 
     setLoading(true);
+    setStatusText("Connecting to Telegram & Sending OTP...");
     setErrorMsg("");
 
     try {
@@ -32,14 +34,16 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        setStatusText("OTP Sent Successfully!");
         setStep(2);
       } else {
-        setErrorMsg(data.detail || "Failed to send verification code.");
+        setErrorMsg(data.detail || data.message || "Failed to send verification code.");
       }
     } catch (err) {
       setErrorMsg(err.message || err.toString());
     } finally {
       setLoading(false);
+      setStatusText("");
     }
   };
 
@@ -48,6 +52,7 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
     if (!code.trim()) return setErrorMsg("Please enter verification code");
 
     setLoading(true);
+    setStatusText("Verifying code with Telegram...");
     setErrorMsg("");
 
     try {
@@ -58,15 +63,19 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        onRefresh();
-        onClose();
+        setStatusText("Telegram Account Connected!");
+        setTimeout(() => {
+          onRefresh();
+          onClose();
+        }, 600);
       } else {
-        setErrorMsg(data.detail || "Invalid verification code.");
+        setErrorMsg(data.detail || data.message || "Invalid verification code.");
       }
     } catch (err) {
       setErrorMsg(err.toString());
     } finally {
       setLoading(false);
+      setStatusText("");
     }
   };
 
@@ -77,10 +86,17 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
           <h3 style={{ fontSize: "16px", fontWeight: "700" }}>
             <i className="fa-paper-plane fa-solid text-blue"></i> Connect Telegram Account
           </h3>
-          <button className="modal-close" onClick={onClose}>&times;</button>
+          <button className="modal-close" onClick={onClose} disabled={loading}>&times;</button>
         </div>
 
         <div className="modal-body">
+          {statusText && (
+            <div style={{ background: "rgba(59, 130, 246, 0.15)", border: "1px solid rgba(59, 130, 246, 0.3)", color: "#60a5fa", padding: "10px 14px", borderRadius: "8px", fontSize: "12px", marginBottom: "14px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <i className="fa-solid fa-spinner fa-spin"></i>
+              <span>{statusText}</span>
+            </div>
+          )}
+
           {errorMsg && (
             <div style={{ background: "rgba(239, 68, 68, 0.15)", border: "1px solid rgba(239, 68, 68, 0.3)", color: "var(--accent-red)", padding: "10px 14px", borderRadius: "8px", fontSize: "12px", marginBottom: "14px" }}>
               {errorMsg}
@@ -97,9 +113,10 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
                 <input
                   type="tel"
                   className="form-control"
-                  placeholder="+91 9049629140"
+                  placeholder="+919876543210"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  disabled={loading}
                   required
                 />
               </div>
@@ -120,6 +137,7 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
                   placeholder="12345"
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
+                  disabled={loading}
                   required
                 />
               </div>
@@ -131,6 +149,7 @@ export default function AuthModal({ isOpen, onClose, onRefresh, status }) {
                   placeholder="Leave empty if disabled"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  disabled={loading}
                 />
               </div>
               <button type="submit" className="btn btn-success w-100" style={{ width: "100%" }} disabled={loading}>
