@@ -501,6 +501,22 @@ async def resolve_telegram_entity(client, channel_id: str):
     raise ValueError(f"Could not resolve Telegram entity for channel: {channel_id}")
 
 
+def is_same_channel(val1: Any, val2: Any) -> bool:
+    if not val1 or not val2:
+        return False
+    s1 = str(val1).strip().lower()
+    s2 = str(val2).strip().lower()
+    if s1 == s2:
+        return True
+    c1 = s1.replace("-100", "").replace("-", "").strip()
+    c2 = s2.replace("-100", "").replace("-", "").strip()
+    if c1 and c2 and c1 == c2:
+        return True
+    if s1.replace("@", "") == s2.replace("@", ""):
+        return True
+    return False
+
+
 @app.get("/api/messages")
 async def get_messages(
     channel_id: Optional[str] = None,
@@ -531,11 +547,24 @@ async def get_messages(
             history = await client.get_messages(entity, limit=30)
             batch_map = {m.id: m for m in history}
             fetched_msgs = []
+
+            source_setting = settings.get("source_channel_id", "all")
+            dest_setting = settings.get("destination_channel_id", "")
+
+            is_source = (str(target_channel).strip() == "all") or is_same_channel(target_channel, source_setting) or is_same_channel(getattr(entity, "id", None), source_setting)
+            is_dest = is_same_channel(target_channel, dest_setting) or is_same_channel(getattr(entity, "id", None), dest_setting)
+
             for msg in history:
                 if not msg.text and not msg.message and not msg.media:
                     continue
                 raw_text = msg.text or msg.message or ""
-                transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
+
+                if is_dest or not is_source:
+                    transformed_text = raw_text
+                    should_forward = True
+                    reason = "Destination message"
+                else:
+                    transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
 
                 has_media = bool(msg.media)
                 media_type = "photo" if getattr(msg, "photo", None) else ("video" if getattr(msg, "video", None) else ("document" if getattr(msg, "document", None) else ("media" if msg.media else None)))
