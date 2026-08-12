@@ -480,8 +480,14 @@ class MultiUserTelegramManager:
                                     except Exception as match_err:
                                         print(f"⚠️ Notice matching parent in destination history: {match_err}")
 
-                            # Always send clean transformed text (never pollute message body with text quotes)
+                            # Always attach clean transformed text, with fallback quote header if native reply ID isn't linked
                             message_to_send = transformed_text
+                            if is_reply and not dest_reply_to_id and reply_text:
+                                snippet = reply_text.strip().replace('\n', ' ')
+                                if len(snippet) > 70:
+                                    snippet = snippet[:67] + "..."
+                                header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n"
+                                message_to_send = f"{header}{transformed_text}"
 
                             # Safe send with FloodWait protection & native Telegram reply linking
                             sent_msg = None
@@ -492,7 +498,11 @@ class MultiUserTelegramManager:
                                     elif override_image and custom_image_url:
                                         sent_msg = await client.send_file(entity=dest_entity, file=custom_image_url, caption=message_to_send, reply_to=dest_reply_to_id)
                                     elif event.media:
-                                        sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=message_to_send, reply_to=dest_reply_to_id)
+                                        try:
+                                            sent_msg = await client.send_file(entity=dest_entity, file=event.media, caption=message_to_send, reply_to=dest_reply_to_id)
+                                        except Exception as media_err:
+                                            print(f"⚠️ Notice sending media reply failed ({media_err}), sending text fallback...")
+                                            sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
                                     else:
                                         sent_msg = await client.send_message(entity=dest_entity, message=message_to_send, reply_to=dest_reply_to_id)
                                     break

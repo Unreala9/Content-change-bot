@@ -5,86 +5,100 @@ export default function Header({ activeTab, setActiveTab, status, onOpenLogin, o
   const isSessionExpired = status?.session_expired;
   const tgUser = status?.user;
   const userEmail = status?.account?.email || "";
+  const planName = status?.subscription?.plan_name || "Free Tier";
 
   const tabTitles = {
-    "tab-studio": { title: "Side-by-Side Sync Studio", sub: "Source Channel Extract → Live Modifier Engine → Destination Channel Paste" },
-    "tab-overview": { title: "Dashboard Overview & Stats", sub: "Real-time Telegram message listener & n8n webhook automation" },
-    "tab-channels": { title: "Dialogs & Channels Matrix", sub: "Inspect, search and manage all accessible Telegram channels and chats" },
+    "tab-studio": { title: "Side-by-Side Sync Studio", sub: "Source Extract → Modifier Engine → Destination Relay" },
+    "tab-overview": { title: "Dashboard Overview & Stats", sub: "Real-time Telegram listener & n8n webhook automation" },
+    "tab-channels": { title: "Dialogs & Channels Matrix", sub: "Inspect and manage accessible Telegram channels" },
     "tab-pricing": { title: "Pricing & Subscription Plans", sub: "Select a plan to enable real-time Telegram channel syncing" }
   };
 
   const currentHeader = tabTitles[activeTab] || tabTitles["tab-studio"];
 
   return (
-    <header className="top-header" style={{ marginBottom: "20px", paddingBottom: "14px" }}>
-      <div className="header-title">
-        <h1 style={{ fontSize: "20px", fontWeight: "700" }}>{currentHeader.title}</h1>
-        <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>{currentHeader.sub}</p>
+    <header className="top-header" style={{ marginBottom: "14px", paddingBottom: "10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+      <div className="header-title" style={{ flexShrink: 1, minWidth: 0 }}>
+        <h1 style={{ fontSize: "18px", fontWeight: "700", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {currentHeader.title}
+        </h1>
+        <p style={{ fontSize: "11px", color: "var(--text-muted)", margin: "2px 0 0 0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {currentHeader.sub}
+        </p>
       </div>
 
-      <div className="header-actions" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "nowrap" }}>
-        <div
-          className="plan-badge-pill"
-          onClick={() => setActiveTab("tab-pricing")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            background: "rgba(252, 213, 53, 0.15)",
-            color: "#fcd535",
-            border: "1px solid rgba(252, 213, 53, 0.35)",
-            padding: "6px 12px",
-            borderRadius: "8px",
-            fontSize: "12px",
-            fontWeight: "600",
-            cursor: "pointer",
-            whiteSpace: "nowrap"
-          }}
-          title="Click to view subscription plan"
-        >
-          <i className="fa-solid fa-crown" style={{ color: "#ffd700" }}></i>
-          <span>{status?.subscription?.plan_name || "Free Tier"}</span>
-        </div>
+      <div className="header-actions" style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+        {/* User Account & Plan Badge */}
+        {userEmail && (
+          <div
+            onClick={() => setActiveTab("tab-pricing")}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "rgba(30, 41, 59, 0.8)",
+              border: "1px solid var(--border-color)",
+              padding: "5px 10px",
+              borderRadius: "8px",
+              fontSize: "11px",
+              fontWeight: "500",
+              cursor: "pointer"
+            }}
+            title="Account & Plan"
+          >
+            <i className="fa-solid fa-circle-user" style={{ color: "#3b82f6" }}></i>
+            <span style={{ color: "#e2e8f0" }}>{userEmail}</span>
+            <span style={{ color: "rgba(255, 255, 255, 0.2)" }}>|</span>
+            <span style={{ color: "#fcd535", fontWeight: "600" }}>
+              <i className="fa-solid fa-crown" style={{ fontSize: "10px", marginRight: "3px" }}></i>
+              {planName}
+            </span>
+          </div>
+        )}
 
+        {/* Telegram Status Badge */}
         {isAuthorized ? (
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <div className="connection-badge status-online" style={{ background: "rgba(16, 185, 129, 0.15)", color: "var(--accent-green)", border: "1px solid rgba(16, 185, 129, 0.3)", padding: "6px 12px", fontSize: "12px", whiteSpace: "nowrap" }}>
-              <i className="fa-solid fa-wifi"></i>
-              <span>{tgUser?.first_name ? `Connected: ${tgUser.first_name}` : "Connected"}</span>
-            </div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(16, 185, 129, 0.12)", border: "1px solid rgba(16, 185, 129, 0.3)", padding: "5px 10px", borderRadius: "8px", fontSize: "11px" }}>
+            <span style={{ color: "var(--accent-green)", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
+              <i className="fa-solid fa-wifi" style={{ fontSize: "10px" }}></i>
+              {tgUser?.first_name ? `TG: ${tgUser.first_name}` : "Connected"}
+            </span>
             <button
-              className="btn btn-danger btn-sm"
-              style={{ padding: "6px 10px", borderRadius: "8px", fontSize: "11px", whiteSpace: "nowrap" }}
               onClick={onDisconnectTelegram}
-              title="Disconnect Telegram Session"
+              title="Disconnect Telegram"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#ef4444",
+                cursor: "pointer",
+                padding: "2px 4px",
+                borderRadius: "4px",
+                lineHeight: 1
+              }}
             >
-              <i className="fa-solid fa-plug-circle-xmark"></i> Disconnect TG
+              <i className="fa-solid fa-xmark" style={{ fontSize: "11px" }}></i>
             </button>
           </div>
         ) : isSessionExpired ? (
           <button
             className="btn btn-warning btn-sm"
-            style={{ background: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)", color: "#ffffff", border: "none", gap: "6px", whiteSpace: "nowrap", padding: "6px 14px", fontSize: "12px" }}
+            style={{ padding: "5px 10px", fontSize: "11px" }}
             onClick={onOpenLogin}
           >
-            <i className="fa-solid fa-triangle-exclamation"></i> Reconnect {tgUser?.first_name || "Telegram"}
+            <i className="fa-solid fa-triangle-exclamation"></i> Reconnect TG
           </button>
         ) : (
-          <button className="btn btn-primary btn-sm" style={{ whiteSpace: "nowrap", padding: "6px 14px", fontSize: "12px" }} onClick={onOpenLogin}>
-            <i className="fa-paper-plane fa-solid"></i> Connect Telegram
+          <button className="btn btn-primary btn-sm" style={{ padding: "5px 10px", fontSize: "11px" }} onClick={onOpenLogin}>
+            <i className="fa-paper-plane fa-solid"></i> Connect TG
           </button>
         )}
 
-        <button className="btn btn-primary btn-sm" style={{ background: "var(--primary-blue)", whiteSpace: "nowrap", padding: "6px 12px", fontSize: "12px" }} onClick={onRefresh} title="Refresh Feeds">
-          <i className="fa-solid fa-arrows-rotate"></i> Refresh
+        <button className="btn btn-secondary btn-sm" style={{ padding: "5px 9px", fontSize: "11px" }} onClick={onRefresh} title="Refresh Feeds">
+          <i className="fa-solid fa-arrows-rotate"></i>
         </button>
 
-        <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: "500", whiteSpace: "nowrap" }}>
-          {userEmail}
-        </span>
-
-        <button className="btn btn-danger btn-sm" style={{ padding: "6px 12px", borderRadius: "8px", whiteSpace: "nowrap", fontSize: "12px" }} onClick={onLogoutUser}>
-          <i className="fa-solid fa-right-from-bracket"></i> Logout
+        <button className="btn btn-danger btn-sm" style={{ padding: "5px 9px", fontSize: "11px" }} onClick={onLogoutUser} title="Logout Account">
+          <i className="fa-solid fa-right-from-bracket"></i>
         </button>
       </div>
     </header>
