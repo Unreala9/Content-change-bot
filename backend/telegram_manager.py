@@ -321,7 +321,16 @@ class MultiUserTelegramManager:
                     clean_event_chat = str(event.chat_id).replace("-100", "").replace("-", "")
                     clean_sender_id = str(event.sender_id).replace("-100", "").replace("-", "") if event.sender_id else ""
                     clean_config_source = configured_source.replace("-100", "").replace("-", "")
-                    if clean_event_chat != clean_config_source and clean_sender_id != clean_config_source:
+
+                    chat_title = (getattr(event.chat, "title", None) or getattr(event.chat, "first_name", None) or "").strip().lower()
+                    chat_username = (getattr(event.chat, "username", None) or "").strip().lower()
+                    conf_lower = configured_source.lower()
+
+                    matches_id = (clean_event_chat == clean_config_source) or (clean_sender_id and clean_sender_id == clean_config_source)
+                    matches_title = bool(chat_title and (conf_lower in chat_title or chat_title in conf_lower))
+                    matches_user = bool(chat_username and (conf_lower.replace("@", "") in chat_username))
+
+                    if not (matches_id or matches_title or matches_user):
                         return
 
                 from main import apply_text_transformation, resolve_telegram_entity
@@ -368,12 +377,28 @@ class MultiUserTelegramManager:
                             custom_image_url = settings.get("custom_image_url", "").strip()
                             strip_media = settings.get("strip_media_images", False)
 
+                            is_real_media = bool(
+                                getattr(event, "photo", None) or
+                                getattr(event, "video", None) or
+                                getattr(event, "document", None) or
+                                getattr(event, "audio", None) or
+                                getattr(event, "voice", None)
+                            )
+
                             if strip_media:
                                 await client.send_message(entity=dest_entity, message=transformed_text)
                             elif override_image and custom_image_url:
-                                await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
-                            elif event.media:
-                                await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
+                                try:
+                                    await client.send_file(entity=dest_entity, file=custom_image_url, caption=transformed_text)
+                                except Exception as img_err:
+                                    print(f"⚠️ Custom image send error: {img_err}. Falling back to text.")
+                                    await client.send_message(entity=dest_entity, message=transformed_text)
+                            elif is_real_media and event.media:
+                                try:
+                                    await client.send_file(entity=dest_entity, file=event.media, caption=transformed_text)
+                                except Exception as media_err:
+                                    print(f"⚠️ Media send error: {media_err}. Falling back to text.")
+                                    await client.send_message(entity=dest_entity, message=transformed_text)
                             else:
                                 await client.send_message(entity=dest_entity, message=transformed_text)
 

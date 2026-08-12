@@ -467,22 +467,62 @@ async def get_channels(current_user: dict = Depends(get_current_user)):
 
 
 async def resolve_telegram_entity(client, channel_id: str):
-    target_chat = int(channel_id) if (channel_id.isdigit() or channel_id.startswith("-")) else channel_id
-    try:
-        return await client.get_entity(target_chat)
-    except Exception as first_err:
-        print(f"⚠️ Direct get_entity failed for {channel_id}: {first_err}. Attempting dialogs search fallback...")
+    if not client or not channel_id:
+        return None
+
+    ch_str = str(channel_id).strip()
+    clean_id = ch_str.replace("-100", "").replace("-", "").strip()
+
+    # 1. Try direct get_entity with candidate ID & username representations
+    candidates = []
+    if ch_str.startswith("-100"):
+        candidates.append(int(ch_str))
+    elif ch_str.startswith("-"):
+        candidates.append(int(ch_str))
+        if clean_id.isdigit():
+            candidates.append(int(f"-100{clean_id}"))
+    elif clean_id.isdigit():
+        candidates.append(int(f"-100{clean_id}"))
+        candidates.append(int(f"-{clean_id}"))
+        candidates.append(int(clean_id))
+    else:
+        if not ch_str.startswith("@") and " " not in ch_str:
+            candidates.append(f"@{ch_str}")
+        candidates.append(ch_str)
+
+    for cand in candidates:
         try:
-            dialogs = await client.get_dialogs(limit=200)
-            target_clean = str(channel_id).replace("-100", "").replace("-", "")
-            for d in dialogs:
-                d_clean = str(d.id).replace("-100", "").replace("-", "")
-                if d_clean == target_clean:
-                    print(f"✅ Found input entity in dialogs fallback for {channel_id}: {d.name}")
-                    return d.entity
-        except Exception as dialog_err:
-            print(f"⚠️ Dialogs search fallback failed for {channel_id}: {dialog_err}")
-        raise first_err
+            entity = await client.get_entity(cand)
+            if entity:
+                return entity
+        except Exception:
+            pass
+
+    # 2. Fallback: Search in user dialogs (by clean numeric ID, title, or username)
+    try:
+        dialogs = await client.get_dialogs(limit=300)
+        # Search by clean numeric ID
+        for d in dialogs:
+            d_clean = str(d.id).replace("-100", "").replace("-", "").strip()
+            if d_clean and clean_id and d_clean == clean_id:
+                return d.entity
+
+        # Search by chat title / display name (case insensitive)
+        ch_lower = ch_str.lower()
+        for d in dialogs:
+            d_name = (d.name or getattr(d.entity, "title", None) or getattr(d.entity, "first_name", None) or "").lower()
+            if d_name and (d_name == ch_lower or ch_lower in d_name or d_name in ch_lower):
+                return d.entity
+
+        # Search by username
+        for d in dialogs:
+            d_user = (getattr(d.entity, "username", None) or "").lower()
+            if d_user and d_user == ch_lower.replace("@", ""):
+                return d.entity
+    except Exception as dialog_err:
+        print(f"⚠️ Dialogs search fallback error for {channel_id}: {dialog_err}")
+
+    raise ValueError(f"Could not resolve Telegram entity for channel: {channel_id}")
 
 
 @app.get("/api/messages")
@@ -497,7 +537,7 @@ async def get_messages(
     if not target_channel:
         target_channel = "all"
 
-    client = telegram_manager.get_existing_client(user_id)
+    client = await telegram_manager.get_client_for_user(user_id)
 
     is_authed = False
     if client and client.is_connected():
