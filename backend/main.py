@@ -200,6 +200,7 @@ def apply_text_transformation(text: str, settings: dict) -> tuple[str, bool, str
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     await telegram_manager.start()
+    create_tracked_task(telegram_manager.connection_watchdog())
     yield
     print("🔌 Graceful Shutdown: Disconnecting Telegram clients & cleaning tasks...")
     await telegram_manager.disconnect_all()
@@ -563,15 +564,37 @@ async def get_messages(
             channel_title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or f"Channel ({target_channel})"
 
             history = await client.get_messages(entity, limit=30)
+            batch_map = {m.id: m for m in history}
             fetched_msgs = []
             for msg in history:
-                if not msg.text and not msg.message:
+                if not msg.text and not msg.message and not msg.media:
                     continue
                 raw_text = msg.text or msg.message or ""
                 transformed_text, should_forward, reason = apply_text_transformation(raw_text, settings)
 
                 has_media = bool(msg.media)
                 media_type = "photo" if getattr(msg, "photo", None) else ("video" if getattr(msg, "video", None) else ("document" if getattr(msg, "document", None) else ("media" if msg.media else None)))
+
+                is_reply = bool(msg.is_reply)
+                reply_to_msg_id = getattr(msg, "reply_to_msg_id", None) or (msg.reply_to.reply_to_msg_id if getattr(msg, "reply_to", None) else None)
+                reply_text = ""
+                reply_sender = ""
+
+                if is_reply and reply_to_msg_id:
+                    parent = batch_map.get(reply_to_msg_id)
+                    if parent:
+                        reply_text = parent.raw_text or parent.message or ""
+                        if parent.sender:
+                            reply_sender = getattr(parent.sender, "first_name", "") or getattr(parent.sender, "title", "") or getattr(parent.sender, "username", "") or ""
+                    else:
+                        try:
+                            parent_msg = await msg.get_reply_message()
+                            if parent_msg:
+                                reply_text = parent_msg.raw_text or parent_msg.message or ""
+                                if parent_msg.sender:
+                                    reply_sender = getattr(parent_msg.sender, "first_name", "") or getattr(parent_msg.sender, "title", "") or getattr(parent_msg.sender, "username", "") or ""
+                        except Exception:
+                            pass
 
                 fetched_msgs.append({
                     "id": msg.id,
@@ -581,6 +604,10 @@ async def get_messages(
                     "transformed_message": transformed_text,
                     "has_media": has_media,
                     "media_type": media_type,
+                    "is_reply": is_reply,
+                    "reply_to_msg_id": reply_to_msg_id,
+                    "reply_text": reply_text,
+                    "reply_sender": reply_sender,
                     "date": msg.date.strftime("%Y-%m-%d %H:%M:%S") if msg.date else "",
                     "status": "synced" if should_forward else f"skipped ({reason})",
                     "telegram_posted": False

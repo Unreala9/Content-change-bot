@@ -24,14 +24,14 @@ export default function StudioTab({
   const [overrideLinks, setOverrideLinks] = useState(settings.override_all_links ?? false);
   const [customUrl, setCustomUrl] = useState(settings.custom_link_url || "");
   const [removeLinks, setRemoveLinks] = useState(settings.remove_all_links ?? false);
-  
+
   const [overrideImage, setOverrideImage] = useState(settings.override_media_image ?? false);
   const [customImageUrl, setCustomImageUrl] = useState(settings.custom_image_url || "");
   const [stripMedia, setStripMedia] = useState(settings.strip_media_images ?? false);
 
   const [filterMode, setFilterMode] = useState(settings.filter_mode || "all");
   const [keywordFilter, setKeywordFilter] = useState(settings.keyword_filter || "");
-  
+
   const [sourceChannel, setSourceChannel] = useState(settings.source_channel_id || "all");
   const [destChannel, setDestChannel] = useState(settings.destination_channel_id || "");
 
@@ -206,7 +206,7 @@ export default function StudioTab({
               const val = e.target.value;
               setSourceChannel(val);
               console.info("[STUDIO DEBUG] Selected source channel changed to:", val);
-              if (onFetchSourceMessages) onFetchSourceMessages(val);
+              if (onFetchMessages) onFetchMessages(val);
               if (onSaveRules) {
                 onSaveRules({
                   source_channel_id: val,
@@ -462,6 +462,26 @@ export default function StudioTab({
                     </div>
 
                     <div className="msg-body" style={{ fontSize: "13px", fontWeight: "600", color: "#ffffff", margin: "8px 0", lineHeight: "1.4" }}>
+                      {m.is_reply && (
+                        <div style={{
+                          background: "rgba(56, 189, 248, 0.08)",
+                          borderLeft: "3px solid #38bdf8",
+                          borderRadius: "0 6px 6px 0",
+                          padding: "5px 10px",
+                          marginBottom: "8px",
+                          fontSize: "12px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "2px"
+                        }}>
+                          <span style={{ fontWeight: "700", color: "#38bdf8", fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}>
+                            <i className="fa-solid fa-reply" style={{ fontSize: "9px" }}></i> {m.reply_sender || "Reply"}
+                          </span>
+                          <span style={{ color: "rgba(255, 255, 255, 0.75)", fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                            {m.reply_text ? m.reply_text : `Replying to message #${m.reply_to_msg_id || ""}`}
+                          </span>
+                        </div>
+                      )}
                       {m.raw_message}
                       {m.has_media && (
                         <div style={{ marginTop: "6px", display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(59, 130, 246, 0.15)", color: "#60a5fa", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "6px", padding: "2px 8px", fontSize: "11px" }}>
@@ -793,6 +813,26 @@ export default function StudioTab({
                     </div>
 
                     <div className="msg-body" style={{ fontSize: "13px", fontWeight: "600", color: "#ffffff", margin: "8px 0", lineHeight: "1.4" }}>
+                      {m.is_reply && (
+                        <div style={{
+                          background: "rgba(16, 185, 129, 0.08)",
+                          borderLeft: "3px solid var(--accent-green)",
+                          borderRadius: "0 6px 6px 0",
+                          padding: "5px 10px",
+                          marginBottom: "8px",
+                          fontSize: "12px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "2px"
+                        }}>
+                          <span style={{ fontWeight: "700", color: "var(--accent-green)", fontSize: "11px", display: "flex", alignItems: "center", gap: "4px" }}>
+                            <i className="fa-solid fa-reply" style={{ fontSize: "9px" }}></i> {m.reply_sender || "Reply"}
+                          </span>
+                          <span style={{ color: "rgba(255, 255, 255, 0.75)", fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                            {m.reply_text ? m.reply_text : `Replying to message #${m.reply_to_msg_id || ""}`}
+                          </span>
+                        </div>
+                      )}
                       {m.transformed_message || m.raw_message}
                     </div>
 
