@@ -57,19 +57,29 @@ export default function StudioTab({
         }
         channelHydratedRef.current = true;
       }
-      if (status.settings.auto_post_telegram !== undefined) {
-        setAutoPostTg(status.settings.auto_post_telegram);
-      }
-      if (status.settings.auto_post_n8n !== undefined) {
-        setAutoPostN8n(status.settings.auto_post_n8n);
-      }
-      if (status.settings.webhook_url) setWebhookUrl(status.settings.webhook_url);
-      if (status.settings.text_prefix !== undefined) setPrefix(status.settings.text_prefix);
-      if (status.settings.text_suffix !== undefined) setSuffix(status.settings.text_suffix);
-      if (status.settings.find_text !== undefined) setFindText(status.settings.find_text);
-      if (status.settings.replace_text !== undefined) setReplaceText(status.settings.replace_text);
-      if (!rulesHydratedRef.current && Array.isArray(status.settings.replacement_rules)) {
-        if (status.settings.replacement_rules.length > 0) {
+
+      if (!rulesHydratedRef.current) {
+        if (status.settings.auto_post_telegram !== undefined) {
+          setAutoPostTg(status.settings.auto_post_telegram);
+        }
+        if (status.settings.auto_post_n8n !== undefined) {
+          setAutoPostN8n(status.settings.auto_post_n8n);
+        }
+        if (status.settings.webhook_url) setWebhookUrl(status.settings.webhook_url);
+        if (status.settings.text_prefix !== undefined) setPrefix(status.settings.text_prefix);
+        if (status.settings.text_suffix !== undefined) setSuffix(status.settings.text_suffix);
+        if (status.settings.find_text !== undefined) setFindText(status.settings.find_text);
+        if (status.settings.replace_text !== undefined) setReplaceText(status.settings.replace_text);
+        if (status.settings.override_all_links !== undefined) setOverrideLinks(status.settings.override_all_links);
+        if (status.settings.custom_link_url !== undefined) setCustomUrl(status.settings.custom_link_url);
+        if (status.settings.remove_all_links !== undefined) setRemoveLinks(status.settings.remove_all_links);
+        if (status.settings.override_media_image !== undefined) setOverrideImage(status.settings.override_media_image);
+        if (status.settings.custom_image_url !== undefined) setCustomImageUrl(status.settings.custom_image_url);
+        if (status.settings.strip_media_images !== undefined) setStripMedia(status.settings.strip_media_images);
+        if (status.settings.filter_mode !== undefined) setFilterMode(status.settings.filter_mode);
+        if (status.settings.keyword_filter !== undefined) setKeywordFilter(status.settings.keyword_filter);
+
+        if (Array.isArray(status.settings.replacement_rules) && status.settings.replacement_rules.length > 0) {
           setIndividualRules(status.settings.replacement_rules.map((r, idx) => ({
             id: r.id || idx + 1,
             find: r.find || "",
