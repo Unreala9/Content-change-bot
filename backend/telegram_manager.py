@@ -393,9 +393,10 @@ class MultiUserTelegramManager:
                         reply_msg = await event.get_reply_message()
                         if not reply_msg and reply_to_msg_id:
                             try:
-                                reply_msg = await client.get_messages(event.chat_id, ids=reply_to_msg_id)
-                            except Exception:
-                                pass
+                                chat_target = getattr(event, "input_chat", None) or event.chat_id
+                                reply_msg = await client.get_messages(chat_target, ids=reply_to_msg_id)
+                            except Exception as get_msg_err:
+                                print(f"⚠️ Notice fetching parent message #{reply_to_msg_id}: {get_msg_err}")
 
                         if reply_msg:
                             reply_text = reply_msg.raw_text or reply_msg.message or ""
@@ -498,11 +499,11 @@ class MultiUserTelegramManager:
                                     snippet = reply_text.strip().replace('\n', ' ')
                                     if len(snippet) > 70:
                                         snippet = snippet[:67] + "..."
-                                    header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n"
+                                    header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n\n"
                                 elif reply_to_msg_id:
-                                    header = f"↪ Replying to message #{reply_to_msg_id}\n"
+                                    header = f"↪ Replying to message #{reply_to_msg_id}\n\n"
                                 else:
-                                    header = "↪ [Reply Message]\n"
+                                    header = "↪ [Reply Message]\n\n"
                                 message_to_send = f"{header}{transformed_text}"
 
                             # Safe send with FloodWait protection & native Telegram reply linking
