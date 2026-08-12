@@ -377,15 +377,26 @@ class MultiUserTelegramManager:
                 chat_name = getattr(event.chat, "title", None) or getattr(event.chat, "first_name", "Chat")
                 raw_text = event.raw_text or ""
 
-                # Extract reply information if this message is replying to another message
-                is_reply = bool(event.is_reply)
+                # Robustly extract reply information across all Telethon versions
+                reply_header = getattr(event, "reply_to", None) or (getattr(event, "message", None) and getattr(event.message, "reply_to", None))
+                is_reply = bool(event.is_reply or reply_header)
+                
                 reply_to_msg_id = getattr(event, "reply_to_msg_id", None)
+                if not reply_to_msg_id and reply_header:
+                    reply_to_msg_id = getattr(reply_header, "reply_to_msg_id", None)
+
                 reply_text = ""
                 reply_sender = ""
 
                 if is_reply:
                     try:
                         reply_msg = await event.get_reply_message()
+                        if not reply_msg and reply_to_msg_id:
+                            try:
+                                reply_msg = await client.get_messages(event.chat_id, ids=reply_to_msg_id)
+                            except Exception:
+                                pass
+
                         if reply_msg:
                             reply_text = reply_msg.raw_text or reply_msg.message or ""
                             if reply_msg.sender:
@@ -482,11 +493,16 @@ class MultiUserTelegramManager:
 
                             # Always attach clean transformed text, with fallback quote header if native reply ID isn't linked
                             message_to_send = transformed_text
-                            if is_reply and not dest_reply_to_id and reply_text:
-                                snippet = reply_text.strip().replace('\n', ' ')
-                                if len(snippet) > 70:
-                                    snippet = snippet[:67] + "..."
-                                header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n"
+                            if is_reply and not dest_reply_to_id:
+                                if reply_text:
+                                    snippet = reply_text.strip().replace('\n', ' ')
+                                    if len(snippet) > 70:
+                                        snippet = snippet[:67] + "..."
+                                    header = f"↪ Replying to {reply_sender}: \"{snippet}\"\n" if reply_sender else f"↪ Replying to: \"{snippet}\"\n"
+                                elif reply_to_msg_id:
+                                    header = f"↪ Replying to message #{reply_to_msg_id}\n"
+                                else:
+                                    header = "↪ [Reply Message]\n"
                                 message_to_send = f"{header}{transformed_text}"
 
                             # Safe send with FloodWait protection & native Telegram reply linking
