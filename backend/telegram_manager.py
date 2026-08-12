@@ -197,6 +197,8 @@ class MultiUserTelegramManager:
             print(f"[TELEGRAM_LOGIN_REQUIRED] No active Telegram session for User: {user_id[:8]}")
             return None
 
+    get_client_for_user = get_client
+
     async def start(self):
         print("🚀 Starting Central Singleton Telegram Client Manager...")
         if IS_SUPABASE_CONFIGURED:
@@ -397,7 +399,16 @@ class MultiUserTelegramManager:
                     clean_event_chat = str(event.chat_id).replace("-100", "").replace("-", "")
                     clean_sender_id = str(event.sender_id).replace("-100", "").replace("-", "") if event.sender_id else ""
                     clean_config_source = configured_source.replace("-100", "").replace("-", "")
-                    if clean_event_chat != clean_config_source and clean_sender_id != clean_config_source:
+
+                    chat_title = (getattr(event.chat, "title", None) or getattr(event.chat, "first_name", None) or "").strip().lower()
+                    chat_username = (getattr(event.chat, "username", None) or "").strip().lower()
+                    conf_lower = configured_source.lower()
+
+                    matches_id = (clean_event_chat == clean_config_source) or (clean_sender_id and clean_sender_id == clean_config_source)
+                    matches_title = bool(chat_title and (conf_lower in chat_title or chat_title in conf_lower))
+                    matches_user = bool(chat_username and (conf_lower.replace("@", "") in chat_username))
+
+                    if not (matches_id or matches_title or matches_user):
                         return
 
                 from main import apply_text_transformation, resolve_telegram_entity
