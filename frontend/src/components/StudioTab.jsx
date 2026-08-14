@@ -375,25 +375,37 @@ export default function StudioTab({
         </div>
       </div>
 
-      {!isAuthorized && (
+      {/* Telegram Not Connected / Expired Warning Banner */}
+      {(!status?.authorized || status?.session_expired) && (
         <div
-          className="banner-notice warning"
+          className="card"
           style={{
-            background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(13, 18, 31, 0.95) 100%)",
-            border: "1px solid rgba(245, 158, 11, 0.35)",
-            borderRadius: "12px",
-            padding: "12px 18px",
+            marginBottom: "16px",
+            background: status?.status_code === "RECONNECTING" || status?.status_code === "DISCONNECTED_TEMPORARILY"
+              ? "rgba(245, 158, 11, 0.08)"
+              : "rgba(239, 68, 68, 0.08)",
+            border: status?.status_code === "RECONNECTING" || status?.status_code === "DISCONNECTED_TEMPORARILY"
+              ? "1px solid rgba(245, 158, 11, 0.3)"
+              : "1px solid rgba(239, 68, 68, 0.3)",
+            padding: "12px 16px",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            marginBottom: "16px",
             gap: "16px"
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, minWidth: 0 }}>
-            <i className="fa-solid fa-triangle-exclamation text-orange font-18" style={{ flexShrink: 0 }}></i>
+            <i className={`fa-solid ${status?.status_code === "RECONNECTING" || status?.status_code === "DISCONNECTED_TEMPORARILY" ? "fa-spinner fa-spin text-orange" : "fa-triangle-exclamation text-red"} font-18`} style={{ flexShrink: 0 }}></i>
             <span style={{ fontSize: "12px", lineHeight: "1.4" }}>
-              {status?.session_expired ? (
+              {status?.status_code === "RECONNECTING" ? (
+                <>
+                  <strong>Reconnecting Telegram Session:</strong> Re-establishing secure connection to Telegram servers in background...
+                </>
+              ) : status?.status_code === "DISCONNECTED_TEMPORARILY" ? (
+                <>
+                  <strong>Connection Temporarily Offline:</strong> Retrying background connection. Your saved session credentials remain completely intact.
+                </>
+              ) : status?.session_expired ? (
                 <>
                   <strong>
                     Session Key Revoked{status?.user?.first_name ? ` for ${status.user.first_name}` : ""}{status?.user?.phone ? ` (${status.user.phone})` : ""}:
@@ -407,13 +419,15 @@ export default function StudioTab({
               )}
             </span>
           </div>
-          <button
-            className="btn btn-primary btn-sm"
-            style={{ whiteSpace: "nowrap", flexShrink: 0, padding: "8px 14px", fontSize: "12px" }}
-            onClick={onOpenLogin}
-          >
-            <i className="fa-paper-plane fa-solid"></i> {status?.session_expired ? `Reconnect ${status?.user?.first_name || "Telegram"}` : "Connect Telegram Account"}
-          </button>
+          {!(status?.status_code === "RECONNECTING" || status?.status_code === "DISCONNECTED_TEMPORARILY") && (
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ whiteSpace: "nowrap", flexShrink: 0, padding: "8px 14px", fontSize: "12px" }}
+              onClick={onOpenLogin}
+            >
+              <i className="fa-paper-plane fa-solid"></i> {status?.session_expired ? `Reconnect ${status?.user?.first_name || "Telegram"}` : "Connect Telegram Account"}
+            </button>
+          )}
         </div>
       )}
 

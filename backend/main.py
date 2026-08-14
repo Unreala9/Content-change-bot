@@ -314,21 +314,20 @@ async def get_user_me(current_user: dict = Depends(get_current_user)):
 async def get_status(current_user: dict = Depends(get_current_user)):
     """
     Returns application and Telegram connection status.
-    Does NOT initiate or create a new Telegram connection. Reuses existing client if present.
+    Uses non-destructive status inspection (CONNECTED | RECONNECTING | DISCONNECTED_TEMPORARILY | SESSION_REVOKED | NO_SESSION).
     """
     user_id = current_user["id"]
     profile = get_user_profile_from_db(user_id) if IS_SUPABASE_CONFIGURED else {}
 
-    # Inspect existing client only
-    client = telegram_manager.get_existing_client(user_id)
+    status_info = await telegram_manager.get_user_session_status(user_id)
+    is_authorized = status_info["authorized"]
+    is_connected = status_info["connected"]
 
-    is_authorized = False
     tg_user = None
-
-    if client and client.is_connected():
-        try:
-            if await client.is_user_authorized():
-                is_authorized = True
+    if is_connected:
+        client = telegram_manager.get_existing_client(user_id)
+        if client and client.is_connected():
+            try:
                 me = await client.get_me()
                 tg_user = {
                     "id": me.id,
@@ -336,15 +335,10 @@ async def get_status(current_user: dict = Depends(get_current_user)):
                     "username": me.username or profile.get("telegram_username") or "",
                     "phone": me.phone or profile.get("telegram_phone") or ""
                 }
-        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError) as auth_err:
-            print(f"🚨 Invalidating duplicate/expired session for user {user_id[:8]}: {auth_err}")
-            await telegram_manager.invalidate_session(user_id, reason=str(auth_err))
-            is_authorized = False
-            tg_user = None
-        except Exception as e:
-            print(f"Notice inspecting Telegram status for user {user_id[:8]}: {e}")
+            except Exception:
+                pass
 
-    if not tg_user and is_authorized and (profile.get("telegram_phone") or profile.get("telegram_first_name")):
+    if not tg_user and (profile.get("telegram_phone") or profile.get("telegram_first_name")):
         tg_user = {
             "id": profile.get("telegram_user_id") or profile.get("telegram_phone") or user_id[:8],
             "first_name": profile.get("telegram_first_name") or "Telegram User",
@@ -356,13 +350,13 @@ async def get_status(current_user: dict = Depends(get_current_user)):
     stats = get_user_stats(user_id)
     subscription = get_user_subscription_from_db(user_id)
 
-    session_expired = bool(profile.get("telegram_phone") and not is_authorized)
-
     return {
-        "connected": is_authorized,
+        "connected": is_connected,
         "authorized": is_authorized,
-        "requires_login": not is_authorized,
-        "session_expired": session_expired,
+        "requires_login": status_info["requires_login"],
+        "session_expired": status_info["session_expired"],
+        "status_code": status_info["status_code"],
+        "status_message": status_info["status_message"],
         "user": tg_user,
         "account": current_user,
         "stats": stats,
@@ -433,9 +427,12 @@ async def get_channels(
         return {"success": True, "channels": channels, "requires_login": False}
     except Exception as e:
         print(f"❌ Error fetching channels for user {user_id[:8]}: {e}")
-        if isinstance(e, (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
+        if isinstance(e, (AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
             await telegram_manager.invalidate_session(user_id, reason=str(e))
             return {"success": False, "channels": [], "requires_login": True, "detail": str(e)}
+        elif isinstance(e, AuthKeyDuplicatedError):
+            print(f"🚨 [TELEGRAM_SESSION_CONFLICT] AuthKeyDuplicatedError in get_channels for user {user_id[:8]}. DB session preserved.")
+            return {"success": False, "channels": [], "requires_login": False, "detail": str(e)}
         return {"success": False, "channels": [], "detail": str(e)}
 
 

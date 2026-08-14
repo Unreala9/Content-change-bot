@@ -57,7 +57,7 @@ export default function Header({ activeTab, setActiveTab, status, onOpenLogin, o
         )}
 
         {/* Telegram Status Badge */}
-        {isAuthorized ? (
+        {isAuthorized && status?.connected ? (
           <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(16, 185, 129, 0.12)", border: "1px solid rgba(16, 185, 129, 0.3)", padding: "5px 10px", borderRadius: "8px", fontSize: "11px" }}>
             <span style={{ color: "var(--accent-green)", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
               <i className="fa-solid fa-wifi" style={{ fontSize: "10px" }}></i>
@@ -78,6 +78,13 @@ export default function Header({ activeTab, setActiveTab, status, onOpenLogin, o
             >
               <i className="fa-solid fa-xmark" style={{ fontSize: "11px" }}></i>
             </button>
+          </div>
+        ) : status?.status_code === "RECONNECTING" || status?.status_code === "DISCONNECTED_TEMPORARILY" ? (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "rgba(245, 158, 11, 0.12)", border: "1px solid rgba(245, 158, 11, 0.3)", padding: "5px 10px", borderRadius: "8px", fontSize: "11px" }}>
+            <span style={{ color: "#f59e0b", fontWeight: "600", display: "flex", alignItems: "center", gap: "4px" }}>
+              <i className="fa-solid fa-spinner fa-spin" style={{ fontSize: "10px" }}></i>
+              {status.status_code === "RECONNECTING" ? "Reconnecting..." : "Temporarily Offline"}
+            </span>
           </div>
         ) : isSessionExpired ? (
           <button

@@ -36,19 +36,19 @@ os.makedirs(SESSIONS_DIR, exist_ok=True)
 def build_telegram_client(session_target) -> TelegramClient:
     """
     Constructs a highly resilient TelegramClient configured with:
-    - Infinite reconnection attempts on network jitter / drops (connection_retries=None)
-    - Ultra-fast retry delay (0.01s / 10ms)
-    - Socket level timeout (10s)
+    - Bounded connection retries (5) to prevent tight C-level infinite socket loops
+    - Production-safe retry delay (1.0s) to prevent TCP SYN flood / socket resets
+    - Socket level timeout (15s)
     - RPC request retries (5)
     """
     return TelegramClient(
         session_target,
         API_ID,
         API_HASH,
-        connection_retries=None,
-        retry_delay=0.01,
+        connection_retries=5,
+        retry_delay=1.0,
         auto_reconnect=True,
-        timeout=10,
+        timeout=15,
         request_retries=5
     )
 
@@ -129,11 +129,65 @@ def add_user_message_log(user_id: str, log_item: dict):
         save_sync_log_to_db(user_id, log_item)
 
 
+import uuid
+
+WORKER_ID = f"pid_{os.getpid()}_{uuid.uuid4().hex[:6]}"
+
+LOCKS_DIR = os.path.join(SESSIONS_DIR, "locks")
+os.makedirs(LOCKS_DIR, exist_ok=True)
+
+
+class CrossProcessUserLock:
+    """
+    Cross-Process Lock using OS file locking (fcntl on Linux/VPS, msvcrt on Windows).
+    Guarantees only ONE worker process across PM2/Uvicorn multi-worker deployments connects to Telegram for a given user.
+    """
+    def __init__(self, user_id: str):
+        safe_user = user_id.replace("-", "_")
+        self.lock_path = os.path.join(LOCKS_DIR, f"{safe_user}_{APP_ENV}.lock")
+        self.fp = None
+
+    def acquire(self) -> bool:
+        try:
+            self.fp = open(self.lock_path, "w")
+            if sys.platform.startswith("win"):
+                import msvcrt
+                msvcrt.locking(self.fp.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.fp.write(f"{WORKER_ID}\n")
+            self.fp.flush()
+            return True
+        except Exception:
+            if self.fp:
+                try:
+                    self.fp.close()
+                except Exception:
+                    pass
+                self.fp = None
+            return False
+
+    def release(self):
+        if self.fp:
+            try:
+                if sys.platform.startswith("win"):
+                    import msvcrt
+                    msvcrt.locking(self.fp.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.fp.fileno(), fcntl.LOCK_UN)
+                self.fp.close()
+            except Exception:
+                pass
+            self.fp = None
+
+
 class MultiUserTelegramManager:
     """
     Central Singleton Telegram Client Manager.
     Guarantees exactly ONE live Telethon client per authenticated user per backend process.
-    Uses per-user asyncio.Lock to prevent concurrent client initializations.
+    Uses per-user asyncio.Lock, CrossProcessUserLock, and reconnect task deduplication to prevent connection storms.
     """
 
     def __init__(self):
@@ -142,6 +196,10 @@ class MultiUserTelegramManager:
         self.pending_logins: Dict[str, Dict[str, Any]] = {}
         self.local_fallback_client: Optional[TelegramClient] = None
         self._locks: Dict[str, asyncio.Lock] = {}
+        self.reconnect_tasks: Dict[str, asyncio.Task] = {}
+        self.reconnect_backoff: Dict[str, float] = {}
+        self.health_cache: Dict[str, float] = {}
+        self.session_ownership: Dict[str, dict] = {}
 
     def _get_user_lock(self, user_id: str) -> asyncio.Lock:
         if user_id not in self._locks:
@@ -159,18 +217,58 @@ class MultiUserTelegramManager:
         """
         client = self.active_clients.get(user_id)
         if client and client.is_connected():
-            print(f"[TELEGRAM_CLIENT_REUSE] Reusing active client for User: {user_id[:8]}")
+            print(f"⚡ [TELEGRAM_CLIENT_REUSED] user_id: {user_id[:8]} | worker: {WORKER_ID}")
             return client
         return None
 
+    async def check_client_health(self, user_id: str, client: TelegramClient, force: bool = False) -> bool:
+        """
+        Lightweight health check using client.get_me() with a 60-second cache to prevent spamming Telegram RPCs.
+        Returns True if authorized and healthy, False otherwise.
+        """
+        if not client or not client.is_connected():
+            return False
+
+        now = datetime.now().timestamp()
+        last_health = self.health_cache.get(user_id, 0)
+        if not force and (now - last_health < 60):
+            return True
+
+        try:
+            me = await asyncio.wait_for(client.get_me(), timeout=10)
+            if me:
+                self.health_cache[user_id] = now
+                return True
+            return False
+        except (AuthKeyUnregisteredError, UserDeactivatedError) as rev_err:
+            err_type = type(rev_err).__name__
+            print(f"🚨 [TELEGRAM_SESSION_REVOKED] user_id: {user_id[:8]} | exception: ({err_type}) {rev_err}")
+            await self.invalidate_telegram_session(user_id, reason=f"Health check failed: {rev_err}", exception_type=err_type)
+            return False
+        except AuthKeyDuplicatedError as dup_err:
+            print(f"🚨 [TELEGRAM_DUPLICATE_AUTH_KEY] user_id: {user_id[:8]} | Health check collision detected. DB session preserved.")
+            return False
+        except Exception as e:
+            print(f"⚠️ Notice health check for user {user_id[:8]}: {e}")
+            return True  # Socket connected; RPC error is transient
+
     async def get_client(self, user_id: str) -> Optional[TelegramClient]:
         """
-        Retrieves existing active client or initializes one if valid session exists.
-        Thread-safe via per-user asyncio.Lock.
+        Retrieves existing active client or initializes one if valid session exists in DB.
+        Per-user locking and task deduplication prevent connection storms during polling.
         """
         existing = self.get_existing_client(user_id)
         if existing:
             return existing
+
+        # Task deduplication: Reuse active reconnect task if one is already running
+        existing_task = self.reconnect_tasks.get(user_id)
+        if existing_task and not existing_task.done():
+            print(f"⏳ [TELEGRAM_RECONNECT_IN_PROGRESS] user_id: {user_id[:8]} | Waiting for active reconnect task...")
+            try:
+                return await existing_task
+            except Exception:
+                pass
 
         async with self._get_user_lock(user_id):
             # Double check inside lock
@@ -181,26 +279,123 @@ class MultiUserTelegramManager:
             if not IS_SUPABASE_CONFIGURED:
                 if not self.local_fallback_client or not self.local_fallback_client.is_connected():
                     session_file = os.path.join(SESSIONS_DIR, f"fallback_{APP_ENV}")
-                    print(f"[TELEGRAM_CLIENT_CREATE] Creating local fallback client: {session_file}")
+                    print(f"🔄 [TELEGRAM_CONNECT_START] Creating local fallback client: {session_file}")
                     self.local_fallback_client = build_telegram_client(session_file)
                     try:
                         await self.local_fallback_client.connect()
                     except Exception as e:
-                        print(f"⚠️ [TELEGRAM_CLIENT_CREATE] Local fallback connection notice: {e}")
+                        print(f"⚠️ [TELEGRAM_RECONNECT_FAILED] Local fallback connection notice: {e}")
                 return self.local_fallback_client
 
             profile = get_user_profile_from_db(user_id)
             session_str = profile.get("telegram_session_string")
             if session_str:
-                return await self.start_user_session(user_id, session_str, profile.get("email", user_id))
+                # Wrap session start in deduplicated reconnect task
+                reconn_task = asyncio.create_task(
+                    self.start_user_session(user_id, session_str, profile.get("email", user_id))
+                )
+                self.reconnect_tasks[user_id] = reconn_task
+                try:
+                    return await reconn_task
+                finally:
+                    self.reconnect_tasks.pop(user_id, None)
 
-            print(f"[TELEGRAM_LOGIN_REQUIRED] No active Telegram session for User: {user_id[:8]}")
+            print(f"ℹ️ [TELEGRAM_NO_SESSION] No active Telegram session stored for User: {user_id[:8]}")
             return None
 
     get_client_for_user = get_client
 
+    async def get_user_session_status(self, user_id: str) -> dict:
+        """
+        Non-destructive session status reporting.
+        Returns status_code: CONNECTED | RECONNECTING | DISCONNECTED_TEMPORARILY | SESSION_REVOKED | NO_SESSION
+        """
+        profile = get_user_profile_from_db(user_id) if IS_SUPABASE_CONFIGURED else {}
+        session_str = profile.get("telegram_session_string")
+        phone = profile.get("telegram_phone")
+
+        if not session_str and not phone:
+            return {
+                "connected": False,
+                "authorized": False,
+                "requires_login": True,
+                "session_expired": False,
+                "status_code": "NO_SESSION",
+                "status_message": "No Telegram account connected."
+            }
+
+        if not session_str and phone:
+            return {
+                "connected": False,
+                "authorized": False,
+                "requires_login": True,
+                "session_expired": True,
+                "status_code": "SESSION_REVOKED",
+                "status_message": "Telegram session revoked. Re-enter 5-digit verification code to connect."
+            }
+
+        # Check active memory client
+        client = self.get_existing_client(user_id)
+        if client and client.is_connected():
+            is_healthy = await self.check_client_health(user_id, client)
+            if is_healthy:
+                return {
+                    "connected": True,
+                    "authorized": True,
+                    "requires_login": False,
+                    "session_expired": False,
+                    "status_code": "CONNECTED",
+                    "status_message": "Connected and active."
+                }
+
+        # Check if reconnect task is actively running
+        reconn_task = self.reconnect_tasks.get(user_id)
+        if reconn_task and not reconn_task.done():
+            return {
+                "connected": False,
+                "authorized": True,
+                "requires_login": False,
+                "session_expired": False,
+                "status_code": "RECONNECTING",
+                "status_message": "Reconnecting to Telegram..."
+            }
+
+        # Attempt transparent connection attempt
+        client = await self.get_client(user_id)
+        if client and client.is_connected():
+            return {
+                "connected": True,
+                "authorized": True,
+                "requires_login": False,
+                "session_expired": False,
+                "status_code": "CONNECTED",
+                "status_message": "Connected and active."
+            }
+
+        # Re-check profile in case it was genuinely revoked during connect attempt
+        updated_profile = get_user_profile_from_db(user_id) if IS_SUPABASE_CONFIGURED else profile
+        if not updated_profile.get("telegram_session_string"):
+            return {
+                "connected": False,
+                "authorized": False,
+                "requires_login": True,
+                "session_expired": True,
+                "status_code": "SESSION_REVOKED",
+                "status_message": "Telegram session revoked. Re-enter verification code."
+            }
+
+        # Transient connection failure - session string is STILL VALID in DB!
+        return {
+            "connected": False,
+            "authorized": True,
+            "requires_login": False,
+            "session_expired": False,
+            "status_code": "DISCONNECTED_TEMPORARILY",
+            "status_message": "Temporarily offline (retrying background connection...)"
+        }
+
     async def start(self):
-        print("🚀 Starting Central Singleton Telegram Client Manager...")
+        print(f"🚀 [TELEGRAM_WORKER_START] Starting Central Singleton Telegram Manager (Worker: {WORKER_ID})...")
         if IS_SUPABASE_CONFIGURED:
             await self.initialize_all_active_sessions()
         else:
@@ -218,7 +413,7 @@ class MultiUserTelegramManager:
         if not IS_SUPABASE_CONFIGURED:
             return
 
-        print("⚡ Initializing active sessions from Supabase...")
+        print("⚡ [TELEGRAM_BATCH_INIT] Initializing active sessions from Supabase in controlled batches...")
         users = get_all_users_with_telegram_sessions()
         print(f"🔍 Found {len(users)} active Telegram session record(s) in Supabase.")
 
@@ -228,21 +423,23 @@ class MultiUserTelegramManager:
             if s_str:
                 try:
                     await self.start_user_session(uid, s_str, u.get("email", uid))
+                    await asyncio.sleep(0.5)  # Rate limit batch startup
                 except Exception as e:
                     print(f"⚠️ Could not start Telegram session for User ({u.get('email', uid)}): {e}")
 
     async def disconnect_all(self):
-        print("🔌 Disconnecting all active Telegram Clients...")
+        print(f"🔌 [TELEGRAM_SHUTDOWN] Disconnecting all active Telegram Clients (Worker: {WORKER_ID})...")
         for user_id, client in list(self.active_clients.items()):
             try:
                 if client.is_connected():
                     await client.disconnect()
-                print(f"[TELEGRAM_CLIENT_DISCONNECT] Disconnected client for User: {user_id[:8]}")
+                print(f"🔌 [TELEGRAM_TEMPORARY_DISCONNECT] Disconnected client for User: {user_id[:8]}")
             except Exception as e:
                 print(f"Error disconnecting client for {user_id}: {e}")
 
         self.active_clients.clear()
         self.attached_listeners.clear()
+        self.session_ownership.clear()
 
         # Clean pending login clients
         for user_id, pending in list(self.pending_logins.items()):
@@ -263,13 +460,16 @@ class MultiUserTelegramManager:
                 pass
             self.local_fallback_client = None
 
-        print("✅ All Telegram Clients disconnected safely.")
+        print("✅ All Telegram Clients disconnected safely. DB session strings preserved.")
 
-    async def invalidate_session(self, user_id: str, reason: str = "") -> dict:
+    async def invalidate_telegram_session(self, user_id: str, reason: str = "", exception_type: str = "") -> dict:
         """
-        Safely invalidates session, disconnects client, removes registry entry, and updates DB.
+        Centralized explicit function for PERMANENT session invalidation.
+        Wipes session string from DB and memory ONLY when session is genuinely revoked by Telegram or manually logged out.
+        Logs structured event: TELEGRAM_SESSION_INVALIDATED.
         """
-        print(f"[TELEGRAM_SESSION_INVALID] Invalidating session for User: {user_id[:8]} | Reason: {reason}")
+        timestamp = datetime.now().isoformat()
+        print(f"🚨 [TELEGRAM_SESSION_INVALIDATED] user_id: {user_id[:8]} | reason: {reason} | exception_type: {exception_type} | timestamp: {timestamp}")
 
         await self.disconnect_client(user_id)
 
@@ -300,13 +500,15 @@ class MultiUserTelegramManager:
             "reason": "telegram_session_invalid"
         }
 
+    invalidate_session = invalidate_telegram_session
+
     async def disconnect_client(self, user_id: str) -> bool:
         if user_id in self.active_clients:
             client = self.active_clients[user_id]
             try:
                 if client.is_connected():
                     await client.disconnect()
-                print(f"[TELEGRAM_CLIENT_DISCONNECT] Client disconnected for User: {user_id[:8]}")
+                print(f"🔌 [TELEGRAM_TEMPORARY_DISCONNECT] Client disconnected for User: {user_id[:8]}")
             except Exception as e:
                 print(f"Notice disconnecting client for {user_id}: {e}")
             del self.active_clients[user_id]
@@ -314,53 +516,93 @@ class MultiUserTelegramManager:
         if user_id in self.attached_listeners:
             self.attached_listeners.remove(user_id)
 
+        self.session_ownership.pop(user_id, None)
         return True
 
     async def start_user_session(self, user_id: str, session_str: str, identifier: str = "") -> Optional[TelegramClient]:
         if user_id in self.active_clients and self.active_clients[user_id].is_connected():
-            print(f"[TELEGRAM_CLIENT_REUSE] Active client found for User: {identifier or user_id[:8]}")
+            print(f"⚡ [TELEGRAM_CLIENT_REUSED] user_id: {user_id[:8]} | worker: {WORKER_ID}")
             return self.active_clients[user_id]
 
-        async with self._get_user_lock(user_id):
-            if user_id in self.active_clients and self.active_clients[user_id].is_connected():
-                return self.active_clients[user_id]
+        # Enforce cross-process single worker ownership across PM2/Uvicorn workers
+        proc_lock = CrossProcessUserLock(user_id)
+        if not proc_lock.acquire():
+            print(f"🔒 [TELEGRAM_CROSS_PROCESS_LOCKED] user_id: {user_id[:8]} | Another worker process owns this Telegram session. Skipping redundant connection.")
+            return self.active_clients.get(user_id)
 
-            print(f"[TELEGRAM_CLIENT_CREATE] Creating new StringSession client for User: {identifier or user_id[:8]}")
+        print(f"🔄 [TELEGRAM_CONNECT_START] user_id: {identifier or user_id[:8]} | worker: {WORKER_ID}")
 
+        # Safely disconnect and clean up any existing stale/disconnected client object
+        old_client = self.active_clients.pop(user_id, None)
+        if old_client:
             try:
-                client = build_telegram_client(StringSession(session_str))
-                await client.connect()
+                if old_client.is_connected():
+                    await old_client.disconnect()
+                print(f"🧹 [TELEGRAM_STALE_CLIENT_REMOVED] user_id: {user_id[:8]}")
+            except Exception as clean_err:
+                print(f"Notice closing stale client for {identifier or user_id[:8]}: {clean_err}")
 
-                if not await client.is_user_authorized():
-                    print(f"⚠️ [TELEGRAM_SESSION_INVALID] StringSession for user {identifier or user_id[:8]} is not authorized.")
-                    await client.disconnect()
-                    await self.invalidate_session(user_id, reason="Not authorized")
-                    return None
+        if user_id in self.attached_listeners:
+            self.attached_listeners.remove(user_id)
 
-                # Warm up internal Telethon entity cache safely
-                try:
-                    await client.get_dialogs(limit=50)
-                except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError):
-                    raise
-                except Exception as cache_err:
-                    print(f"⚠️ Notice warming dialogs cache for {identifier or user_id[:8]}: {cache_err}")
+        try:
+            client = build_telegram_client(StringSession(session_str))
+            await client.connect()
 
-                self._attach_listener(user_id, client)
-                self.active_clients[user_id] = client
-                print(f"✅ [TELEGRAM_CLIENT_CREATE] Client ready for User: {identifier or user_id[:8]}")
-                return client
-
-            except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError) as auth_err:
-                err_type = type(auth_err).__name__
-                if isinstance(auth_err, AuthKeyDuplicatedError):
-                    print(f"🚨 [TELEGRAM_SESSION_INVALID] AuthKeyDuplicatedError for user {identifier or user_id[:8]}! Conflict detected: Multiple backend processes (e.g. Local PC 'python main.py' and VPS Server) are running simultaneously using the same StringSession!")
-                else:
-                    print(f"🚨 [TELEGRAM_SESSION_INVALID] Session invalidated for user {identifier or user_id[:8]}: ({err_type}) {auth_err}")
-                await self.invalidate_session(user_id, reason=f"{err_type}: {auth_err}")
+            if not await client.is_user_authorized():
+                print(f"🚨 [TELEGRAM_SESSION_REVOKED] user_id: {identifier or user_id[:8]} | Not authorized on connect")
+                await client.disconnect()
+                proc_lock.release()
+                await self.invalidate_telegram_session(user_id, reason="Not authorized")
                 return None
-            except Exception as e:
-                print(f"⚠️ Error starting Telegram session for user {identifier or user_id[:8]}: {e}")
-                return None
+
+            # Warm up internal Telethon entity cache safely
+            try:
+                await client.get_dialogs(limit=50)
+            except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError, FloodWaitError):
+                raise
+            except Exception as cache_err:
+                print(f"⚠️ Notice warming dialogs cache for {identifier or user_id[:8]}: {cache_err}")
+
+            self._attach_listener(user_id, client)
+            self.active_clients[user_id] = client
+            self.session_ownership[user_id] = {
+                "user_id": user_id,
+                "worker_id": WORKER_ID,
+                "connected_at": datetime.now().isoformat(),
+                "last_heartbeat": datetime.now().timestamp()
+            }
+            self.reconnect_backoff[user_id] = 1.0  # Reset backoff
+            self.health_cache[user_id] = datetime.now().timestamp()
+            print(f"✅ [TELEGRAM_CONNECTED] user_id: {identifier or user_id[:8]} | worker: {WORKER_ID}")
+            return client
+
+        except (AuthKeyUnregisteredError, UserDeactivatedError) as rev_err:
+            err_type = type(rev_err).__name__
+            print(f"🚨 [TELEGRAM_SESSION_REVOKED] user_id: {identifier or user_id[:8]} | exception: ({err_type}) {rev_err}")
+            proc_lock.release()
+            await self.invalidate_telegram_session(user_id, reason=f"{err_type}: {rev_err}", exception_type=err_type)
+            return None
+        except FloodWaitError as fwe:
+            wait_secs = fwe.seconds + 1
+            print(f"⏳ [TELEGRAM_FLOOD_WAIT] user_id: {identifier or user_id[:8]} | Rate limited by Telegram: Respecting exact {wait_secs}s wait penalty.")
+            self.reconnect_backoff[user_id] = float(wait_secs)
+            proc_lock.release()
+            await asyncio.sleep(wait_secs)
+            return None
+        except AuthKeyDuplicatedError as dup_err:
+            print(f"🚨 [TELEGRAM_DUPLICATE_AUTH_KEY] user_id: {identifier or user_id[:8]}! Duplicate connection detected. DB session string PRESERVED.")
+            current_backoff = min(self.reconnect_backoff.get(user_id, 1.0) * 2, 30.0)
+            self.reconnect_backoff[user_id] = current_backoff
+            proc_lock.release()
+            return None
+        except Exception as e:
+            err_type = type(e).__name__
+            print(f"⚠️ [TELEGRAM_RECONNECT_FAILED] user_id: {identifier or user_id[:8]} | exception: ({err_type}) {e}. DB session PRESERVED.")
+            current_backoff = min(self.reconnect_backoff.get(user_id, 1.0) * 2, 30.0)
+            self.reconnect_backoff[user_id] = current_backoff
+            proc_lock.release()
+            return None
 
     def _attach_listener(self, user_id: str, client: TelegramClient):
         if user_id in self.attached_listeners:
@@ -815,8 +1057,10 @@ class MultiUserTelegramManager:
             return channels
         except Exception as e:
             print(f"❌ Error fetching dialogs for user {user_id[:8]}: {e}")
-            if isinstance(e, (AuthKeyDuplicatedError, AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
+            if isinstance(e, (AuthKeyUnregisteredError, UserDeactivatedError, UnauthorizedError)):
                 await self.invalidate_session(user_id, reason=str(e))
+            elif isinstance(e, AuthKeyDuplicatedError):
+                print(f"🚨 [TELEGRAM_SESSION_CONFLICT] AuthKeyDuplicatedError in get_user_dialogs for user {user_id[:8]}. DB session string PRESERVED.")
             cached = self.user_dialogs_cache.get(user_id) if hasattr(self, "user_dialogs_cache") else None
             return cached.get("channels", []) if cached else []
 
