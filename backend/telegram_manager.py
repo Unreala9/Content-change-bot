@@ -198,6 +198,7 @@ class MultiUserTelegramManager:
         self._locks: Dict[str, asyncio.Lock] = {}
         self.reconnect_tasks: Dict[str, asyncio.Task] = {}
         self.reconnect_backoff: Dict[str, float] = {}
+        self.last_connect_attempt: Dict[str, float] = {}
         self.health_cache: Dict[str, float] = {}
         self.session_ownership: Dict[str, dict] = {}
 
@@ -255,11 +256,18 @@ class MultiUserTelegramManager:
     async def get_client(self, user_id: str) -> Optional[TelegramClient]:
         """
         Retrieves existing active client or initializes one if valid session exists in DB.
-        Per-user locking and task deduplication prevent connection storms during polling.
+        Per-user locking, backoff cooldown, and task deduplication prevent connection storms during polling.
         """
         existing = self.get_existing_client(user_id)
         if existing:
             return existing
+
+        # Respect exponential backoff cooldown to prevent connection storms on duplicate auth key conflicts
+        now = datetime.now().timestamp()
+        last_failed = self.last_connect_attempt.get(user_id, 0)
+        cooldown = self.reconnect_backoff.get(user_id, 1.0)
+        if now - last_failed < cooldown:
+            return None
 
         # Task deduplication: Reuse active reconnect task if one is already running
         existing_task = self.reconnect_tasks.get(user_id)
@@ -580,6 +588,7 @@ class MultiUserTelegramManager:
         except (AuthKeyUnregisteredError, UserDeactivatedError) as rev_err:
             err_type = type(rev_err).__name__
             print(f"🚨 [TELEGRAM_SESSION_REVOKED] user_id: {identifier or user_id[:8]} | exception: ({err_type}) {rev_err}")
+            self.last_connect_attempt[user_id] = datetime.now().timestamp()
             proc_lock.release()
             await self.invalidate_telegram_session(user_id, reason=f"{err_type}: {rev_err}", exception_type=err_type)
             return None
@@ -587,6 +596,11 @@ class MultiUserTelegramManager:
             wait_secs = fwe.seconds + 1
             print(f"⏳ [TELEGRAM_FLOOD_WAIT] user_id: {identifier or user_id[:8]} | Rate limited by Telegram: Respecting exact {wait_secs}s wait penalty.")
             self.reconnect_backoff[user_id] = float(wait_secs)
+            self.last_connect_attempt[user_id] = datetime.now().timestamp()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
             proc_lock.release()
             await asyncio.sleep(wait_secs)
             return None
@@ -594,6 +608,11 @@ class MultiUserTelegramManager:
             print(f"🚨 [TELEGRAM_DUPLICATE_AUTH_KEY] user_id: {identifier or user_id[:8]}! Duplicate connection detected. DB session string PRESERVED.")
             current_backoff = min(self.reconnect_backoff.get(user_id, 1.0) * 2, 30.0)
             self.reconnect_backoff[user_id] = current_backoff
+            self.last_connect_attempt[user_id] = datetime.now().timestamp()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
             proc_lock.release()
             return None
         except Exception as e:
@@ -601,6 +620,11 @@ class MultiUserTelegramManager:
             print(f"⚠️ [TELEGRAM_RECONNECT_FAILED] user_id: {identifier or user_id[:8]} | exception: ({err_type}) {e}. DB session PRESERVED.")
             current_backoff = min(self.reconnect_backoff.get(user_id, 1.0) * 2, 30.0)
             self.reconnect_backoff[user_id] = current_backoff
+            self.last_connect_attempt[user_id] = datetime.now().timestamp()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
             proc_lock.release()
             return None
 
