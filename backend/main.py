@@ -438,11 +438,18 @@ async def get_channels(
 
 from telethon.tl.types import PeerUser, PeerChat, PeerChannel
 
+RESOLVED_ENTITIES_CACHE: Dict[str, Any] = {}
+
+
 async def resolve_telegram_entity(client, channel_id: str):
     if not client or not channel_id:
         return None
 
     ch_str = str(channel_id).strip()
+    cache_key = f"{id(client)}_{ch_str}"
+    if cache_key in RESOLVED_ENTITIES_CACHE:
+        return RESOLVED_ENTITIES_CACHE[cache_key]
+
     clean_id = ch_str.replace("-100", "").replace("-", "").strip()
 
     # 1. Try direct get_entity with candidate ID, Peer objects, & username representations
@@ -474,6 +481,7 @@ async def resolve_telegram_entity(client, channel_id: str):
         try:
             entity = await client.get_entity(cand)
             if entity:
+                RESOLVED_ENTITIES_CACHE[cache_key] = entity
                 return entity
         except Exception:
             pass
@@ -485,6 +493,7 @@ async def resolve_telegram_entity(client, channel_id: str):
         for d in dialogs:
             d_clean = str(d.id).replace("-100", "").replace("-", "").strip()
             if d_clean and clean_id and d_clean == clean_id:
+                RESOLVED_ENTITIES_CACHE[cache_key] = d.entity
                 return d.entity
 
         # Search by chat title / display name (case insensitive)
@@ -492,12 +501,14 @@ async def resolve_telegram_entity(client, channel_id: str):
         for d in dialogs:
             d_name = (d.name or getattr(d.entity, "title", None) or getattr(d.entity, "first_name", None) or "").lower()
             if d_name and (d_name == ch_lower or ch_lower in d_name or d_name in ch_lower):
+                RESOLVED_ENTITIES_CACHE[cache_key] = d.entity
                 return d.entity
 
         # Search by username
         for d in dialogs:
             d_user = (getattr(d.entity, "username", None) or "").lower()
             if d_user and d_user == ch_lower.replace("@", ""):
+                RESOLVED_ENTITIES_CACHE[cache_key] = d.entity
                 return d.entity
     except Exception as dialog_err:
         print(f"⚠️ Dialogs search fallback error for {channel_id}: {dialog_err}")

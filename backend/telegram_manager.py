@@ -750,10 +750,10 @@ class MultiUserTelegramManager:
                             dest_reply_to_id = None
                             if is_reply and reply_to_msg_id:
                                 dest_reply_to_id = get_dest_msg_id(user_id, reply_to_msg_id)
-                                # Auto-match fallback: if parent was posted before bot restart, match by content or recent media in destination
+                                 # Auto-match fallback: if parent was posted before bot restart, match by content or recent media in destination
                                 if not dest_reply_to_id:
                                     try:
-                                        dest_history = await client.get_messages(dest_entity, limit=50)
+                                        dest_history = await asyncio.wait_for(client.get_messages(dest_entity, limit=10), timeout=2.0)
                                         if reply_text and reply_text.strip() and not reply_text.startswith("["):
                                             clean_reply = reply_text.strip()[:50].lower()
                                             for dm in dest_history:
@@ -842,9 +842,10 @@ class MultiUserTelegramManager:
                             print(f"⚠️ [User:{user_id[:8]}] Telegram auto-post error: {tg_err}")
                             log_item["telegram_error"] = str(tg_err)
 
-                add_user_message_log(user_id, log_item)
+                # Non-blocking async background DB log saving
+                asyncio.create_task(asyncio.to_thread(add_user_message_log, user_id, log_item))
 
-                # n8n Webhook Forwarding
+                # Non-blocking async n8n Webhook Forwarding
                 auto_post_n8n = settings.get("auto_post_n8n", True)
                 webhook_url = settings.get("webhook_url", "")
 
@@ -863,14 +864,16 @@ class MultiUserTelegramManager:
                         "reply_text": reply_text,
                         "reply_sender": reply_sender
                     }
-                    loop = asyncio.get_event_loop()
 
-                    def post_webhook():
-                        return requests.post(webhook_url, json=payload, timeout=10)
+                    async def _async_send_webhook(target_url, body):
+                        try:
+                            loop = asyncio.get_event_loop()
+                            res = await loop.run_in_executor(None, lambda: requests.post(target_url, json=body, timeout=5))
+                            print(f"✅ [User:{user_id[:8]}] Sent to n8n ({chat_name}) | Status: {res.status_code}")
+                        except Exception as wh_err:
+                            print(f"⚠️ Notice sending webhook to {target_url}: {wh_err}")
 
-                    response = await loop.run_in_executor(None, post_webhook)
-                    log_item["status"] = f"sent (HTTP {response.status_code})"
-                    print(f"✅ [User:{user_id[:8]}] Sent to n8n ({chat_name}) | Status: {response.status_code}")
+                    asyncio.create_task(_async_send_webhook(webhook_url, payload))
 
             except Exception as e:
                 stats["errors"] += 1
