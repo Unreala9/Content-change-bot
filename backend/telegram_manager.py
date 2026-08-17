@@ -687,8 +687,15 @@ class MultiUserTelegramManager:
                     clean_sender_id = str(event.sender_id).replace("-100", "").replace("-", "") if event.sender_id else ""
                     clean_config_source = configured_source.replace("-100", "").replace("-", "")
 
-                    chat_title = (getattr(event.chat, "title", None) or getattr(event.chat, "first_name", None) or "").strip().lower()
-                    chat_username = (getattr(event.chat, "username", None) or "").strip().lower()
+                    chat_obj = event.chat
+                    if not getattr(chat_obj, "title", None) and hasattr(event, "get_chat"):
+                        try:
+                            chat_obj = await event.get_chat()
+                        except Exception:
+                            pass
+
+                    chat_title = (getattr(chat_obj, "title", None) or getattr(chat_obj, "first_name", None) or "").strip().lower()
+                    chat_username = (getattr(chat_obj, "username", None) or "").strip().lower()
                     conf_lower = configured_source.lower()
 
                     matches_id = (clean_event_chat == clean_config_source) or (clean_sender_id and clean_sender_id == clean_config_source)
@@ -696,6 +703,7 @@ class MultiUserTelegramManager:
                     matches_user = bool(chat_username and (conf_lower.replace("@", "") in chat_username))
 
                     if not (matches_id or matches_title or matches_user):
+                        print(f"⏩ [Skip Relay User:{user_id[:8]}] Message chat ({event.chat_id} / '{chat_title}') does not match configured source ({configured_source})")
                         return
 
                 from main import apply_text_transformation, resolve_telegram_entity
@@ -911,6 +919,13 @@ class MultiUserTelegramManager:
 
                     client = self.active_clients.get(uid)
                     if not client or not client.is_connected():
+                        # Respect exponential backoff cooldown to prevent watchdog log spam on AuthKeyDuplicatedError
+                        now = datetime.now().timestamp()
+                        last_attempt = self.last_connect_attempt.get(uid, 0)
+                        cooldown = self.reconnect_backoff.get(uid, 1.0)
+                        if now - last_attempt < cooldown:
+                            continue
+
                         print(f"🔄 [WATCHDOG] Reconnecting dropped client for User: {u.get('email', uid[:8])}...")
                         try:
                             if uid in self.attached_listeners:
